@@ -157,24 +157,31 @@ where
             |_: &listener::Error| true, // always restart listener actor
         );
 
+        let inbound_substream_handlers = [
+            (
+                daemon::rollover::PROTOCOL,
+                xtra::message_channel::StrongMessageChannel::clone_channel(&libp2p_rollover_addr),
+            ),
+            (
+                daemon::collab_settlement::PROTOCOL,
+                xtra::message_channel::StrongMessageChannel::clone_channel(
+                    &libp2p_collab_settlement_addr,
+                ),
+            ),
+        ];
+
+        // TODO: What's the best way to get the protocols as Vec<String>? Since we want to serialize
+        // / deserialize the protocols &'static str is not helping here  Do we have to
+        // change the constructor of Endpoint to achieve this? let protocols =
+        // inbound_substream_handlers     .iter()
+        //     .map(|(proto, _)| *proto)
+        //     .collect::<Vec<&'static str>>();
+
         let endpoint = Endpoint::new(
             TokioTcpConfig::new(),
             identity.libp2p,
             ENDPOINT_CONNECTION_TIMEOUT,
-            [
-                (
-                    daemon::rollover::PROTOCOL,
-                    xtra::message_channel::StrongMessageChannel::clone_channel(
-                        &libp2p_rollover_addr,
-                    ),
-                ),
-                (
-                    daemon::collab_settlement::PROTOCOL,
-                    xtra::message_channel::StrongMessageChannel::clone_channel(
-                        &libp2p_collab_settlement_addr,
-                    ),
-                ),
-            ],
+            inbound_substream_handlers,
             endpoint::Subscribers::new(
                 vec![ping_address.clone_channel()],
                 vec![ping_address.clone_channel()],
