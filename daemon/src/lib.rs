@@ -56,6 +56,7 @@ pub mod rollover;
 pub mod seed;
 pub mod setup_contract;
 // TODO: Remove setup_contract_deprecated module after phasing out legacy networking
+pub mod identify;
 pub mod setup_contract_deprecated;
 pub mod setup_taker;
 pub mod taker_cfd;
@@ -352,7 +353,7 @@ where
     }
 }
 
-#[derive(Debug, Copy, Clone, Display)]
+#[derive(Debug, Copy, Clone, Display, PartialEq)]
 pub enum Environment {
     Umbrel,
     RaspiBlitz,
@@ -364,12 +365,55 @@ pub enum Environment {
 }
 
 impl Environment {
-    pub fn from_str_or_unknown(s: &str) -> Environment {
-        match s {
+    pub fn from_envvar_or_unknown(envvar_val: &str) -> Environment {
+        match envvar_val {
             "umbrel" => Environment::Umbrel,
             "raspiblitz" => Environment::RaspiBlitz,
             "docker" => Environment::Docker,
             _ => Environment::Unknown,
         }
+    }
+
+    fn from_str_or_unknown(s: &str) -> Environment {
+        match s {
+            "Umbrel" => Environment::Umbrel,
+            "RaspiBlitz" => Environment::RaspiBlitz,
+            "Docker" => Environment::Docker,
+            "Binary" => Environment::Binary,
+            "Test" => Environment::Test,
+            "Legacy" => Environment::Legacy,
+            _ => Environment::Unknown,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Environment::Binary;
+    use crate::Environment::Docker;
+    use crate::Environment::Legacy;
+    use crate::Environment::RaspiBlitz;
+    use crate::Environment::Test;
+    use crate::Environment::Umbrel;
+
+    #[test]
+    fn snapshot_test_environment_from_str_or_unknown() {
+        assert_eq!(Environment::from_str_or_unknown("Umbrel"), Umbrel);
+        assert_eq!(Environment::from_str_or_unknown("RaspiBlitz"), RaspiBlitz);
+        assert_eq!(Environment::from_str_or_unknown("Docker"), Docker);
+        assert_eq!(Environment::from_str_or_unknown("Binary"), Binary);
+        assert_eq!(Environment::from_str_or_unknown("Test"), Test);
+        assert_eq!(Environment::from_str_or_unknown("Legacy"), Legacy);
+    }
+
+    #[test]
+    fn snapshot_test_environment_from_envvar() {
+        assert_eq!(Environment::from_envvar_or_unknown("umbrel"), Umbrel);
+        assert_eq!(
+            Environment::from_envvar_or_unknown("raspiblitz"),
+            RaspiBlitz
+        );
+        assert_eq!(Environment::from_envvar_or_unknown("docker"), Docker);
     }
 }

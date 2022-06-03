@@ -342,7 +342,7 @@ async fn main() -> Result<()> {
     };
 
     let environment = match env::var("ITCHYSATS_ENV") {
-        Ok(environment) => Environment::from_str_or_unknown(environment.as_str()),
+        Ok(environment) => Environment::from_envvar_or_unknown(environment.as_str()),
         Err(_) => Environment::Binary,
     };
 
