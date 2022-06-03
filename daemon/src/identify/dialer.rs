@@ -1,5 +1,6 @@
 use crate::identify::protocol;
 use crate::identify::PROTOCOL;
+use crate::Environment;
 use std::collections::HashMap;
 use tokio_tasks::Tasks;
 use xtra::async_trait;
@@ -20,7 +21,7 @@ pub struct Actor {
     endpoint: Address<Endpoint>,
     tasks: Tasks,
     spawner: Option<Address<spawner::Actor>>,
-    identities: HashMap<PeerId, protocol::IdentifyMsg>,
+    identities: HashMap<PeerId, IdentityInfo>,
 }
 
 impl Actor {
@@ -52,32 +53,55 @@ pub(crate) struct PeerIdentityReceived {
     peer_identity: protocol::IdentifyMsg,
 }
 
+#[derive(Debug, Clone)]
+pub struct IdentityInfo {
+    pub wire_version: String,
+    pub daemon_version: String,
+    pub environment: Environment,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Conversion to identity info failed: {error}")]
+pub struct ConversionError {
+    #[source]
+    error: anyhow::Error,
+}
+
+impl TryFrom<protocol::IdentifyMsg> for IdentityInfo {
+    type Error = ConversionError;
+
+    fn try_from(identity_msg: protocol::IdentifyMsg) -> Result<Self, Self::Error> {
+        let identity_info = IdentityInfo {
+            wire_version: identity_msg.wire_version(),
+            daemon_version: identity_msg
+                .daemon_version()
+                .map_err(|error| ConversionError { error })?,
+            environment: identity_msg.environment().into(),
+        };
+
+        Ok(identity_info)
+    }
+}
+
 #[xtra_productivity]
 impl Actor {
-    async fn handle(&mut self, msg: GetIdentifyInfo) -> Option<protocol::IdentifyMsg> {
+    async fn handle(&mut self, msg: GetIdentifyInfo) -> Option<IdentityInfo> {
         let peer_id = msg.0;
         self.identities.get(&peer_id).cloned()
     }
 
     async fn handle(&mut self, msg: PeerIdentityReceived) {
-        let daemon_version = match msg.peer_identity.daemon_version() {
-            Ok(daemon_version) => daemon_version,
+        let peer_id = msg.peer_id;
+        let identity_info = match IdentityInfo::try_from(msg.peer_identity.clone()) {
+            Ok(identity_info) => identity_info,
             Err(e) => {
                 tracing::error!("Peer identity discarded {:?}: {e:#}", msg.peer_identity);
                 return;
             }
         };
 
-        let environment = match msg.peer_identity.environment() {
-            Ok(environment) => environment,
-            Err(e) => {
-                tracing::error!("Peer identity discarded {:?}, {e:#}", msg.peer_identity);
-                return;
-            }
-        };
-
-        tracing::info!(peer_id=%msg.peer_id, %daemon_version, %environment, "New peer information received");
-        self.identities.insert(msg.peer_id, msg.peer_identity);
+        tracing::info!(%peer_id, daemon_version=%identity_info.daemon_version, environment=%identity_info.environment, wire_version=%identity_info.wire_version, "New identify message received");
+        self.identities.insert(peer_id, identity_info);
     }
 }
 

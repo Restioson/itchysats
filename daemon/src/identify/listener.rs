@@ -53,7 +53,7 @@ impl Actor {
 
         let identiyfy_msg = protocol::IdentifyMsg::new(
             self.daemon_version.clone(),
-            self.environment,
+            self.environment.into(),
             self.identity.clone(),
             self.listen_addrs.clone(),
             self.observed_addr.clone(),

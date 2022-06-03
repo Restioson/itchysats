@@ -1,5 +1,4 @@
 use crate::future_ext::FutureExt;
-use crate::Environment;
 use crate::Multiaddr;
 use anyhow::Context;
 use anyhow::Result;
@@ -30,6 +29,9 @@ pub struct IdentifyMsg {
     listen_addrs: Vec<Multiaddr>, // TODO serialize as bytes
     observed_addr: Multiaddr,     // TODO serialize as bytes
     protocols: Vec<String>,
+
+    /// Optional environment field that is not part of the identify spec
+    environment: Option<Environment>,
 }
 
 impl IdentifyMsg {
@@ -41,7 +43,7 @@ impl IdentifyMsg {
         observed_addr: Multiaddr,
         protocols: Vec<String>,
     ) -> Self {
-        let agent_version = format!("itchysats/{}/{}", environment, daemon_version);
+        let agent_version = format!("itchysats/{}", daemon_version);
 
         Self {
             protocol_version: PROTOCOL_VERSION.to_string(),
@@ -49,23 +51,20 @@ impl IdentifyMsg {
             listen_addrs,
             observed_addr,
             protocols,
+            environment: Some(environment),
         }
     }
 
     pub fn daemon_version(&self) -> Result<String> {
         let splitted = self.agent_version.split('/').collect::<Vec<_>>();
         splitted
-            .get(2)
+            .get(1)
             .map(|str| str.to_string())
             .context("Unable to extract daemon version")
     }
 
-    pub fn environment(&self) -> Result<Environment> {
-        let splitted = self.agent_version.split('/').collect::<Vec<_>>();
-        splitted
-            .get(1)
-            .map(|str| Environment::from_str_or_unknown(*str))
-            .context("Unable to extract daemon version")
+    pub fn environment(&self) -> Environment {
+        self.environment.unwrap_or(Environment::Unknown)
     }
 
     pub fn wire_version(&self) -> String {
@@ -103,12 +102,54 @@ where
     Ok(())
 }
 
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum Environment {
+    Umbrel,
+    RaspiBlitz,
+    Docker,
+    Binary,
+    Test,
+    Legacy,
+    Unknown,
+    Maker,
+}
+
+impl From<crate::Environment> for Environment {
+    fn from(environment: crate::Environment) -> Self {
+        match environment {
+            crate::Environment::Umbrel => Environment::Umbrel,
+            crate::Environment::RaspiBlitz => Environment::RaspiBlitz,
+            crate::Environment::Docker => Environment::Docker,
+            crate::Environment::Binary => Environment::Binary,
+            crate::Environment::Test => Environment::Test,
+            crate::Environment::Legacy => Environment::Legacy,
+            crate::Environment::Unknown => Environment::Unknown,
+            crate::Environment::Maker => Environment::Maker,
+        }
+    }
+}
+
+impl From<Environment> for crate::Environment {
+    fn from(environment: Environment) -> Self {
+        match environment {
+            Environment::Umbrel => crate::Environment::Umbrel,
+            Environment::RaspiBlitz => crate::Environment::RaspiBlitz,
+            Environment::Docker => crate::Environment::Docker,
+            Environment::Binary => crate::Environment::Binary,
+            Environment::Test => crate::Environment::Test,
+            Environment::Legacy => crate::Environment::Legacy,
+            Environment::Maker => crate::Environment::Maker,
+            Environment::Unknown => crate::Environment::Unknown,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn extract_daemon_version_and_environment() {
+    fn extract_daemon_version() {
         let msg = IdentifyMsg::new(
             "0.4.3".to_string(),
             Environment::Umbrel,
@@ -119,9 +160,7 @@ mod tests {
         );
 
         let daemon_version = msg.daemon_version().unwrap();
-        let environment = msg.environment().unwrap();
 
         assert_eq!(daemon_version, "0.4.3".to_string());
-        assert_eq!(environment, Environment::Umbrel);
     }
 }

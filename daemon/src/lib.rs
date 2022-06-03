@@ -362,26 +362,15 @@ pub enum Environment {
     Test,
     Legacy,
     Unknown,
+    Maker,
 }
 
 impl Environment {
-    pub fn from_envvar_or_unknown(envvar_val: &str) -> Environment {
+    pub fn from_str_or_unknown(envvar_val: &str) -> Environment {
         match envvar_val {
             "umbrel" => Environment::Umbrel,
             "raspiblitz" => Environment::RaspiBlitz,
             "docker" => Environment::Docker,
-            _ => Environment::Unknown,
-        }
-    }
-
-    fn from_str_or_unknown(s: &str) -> Environment {
-        match s {
-            "Umbrel" => Environment::Umbrel,
-            "RaspiBlitz" => Environment::RaspiBlitz,
-            "Docker" => Environment::Docker,
-            "Binary" => Environment::Binary,
-            "Test" => Environment::Test,
-            "Legacy" => Environment::Legacy,
             _ => Environment::Unknown,
         }
     }
@@ -390,30 +379,14 @@ impl Environment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Environment::Binary;
     use crate::Environment::Docker;
-    use crate::Environment::Legacy;
     use crate::Environment::RaspiBlitz;
-    use crate::Environment::Test;
     use crate::Environment::Umbrel;
 
     #[test]
     fn snapshot_test_environment_from_str_or_unknown() {
-        assert_eq!(Environment::from_str_or_unknown("Umbrel"), Umbrel);
-        assert_eq!(Environment::from_str_or_unknown("RaspiBlitz"), RaspiBlitz);
-        assert_eq!(Environment::from_str_or_unknown("Docker"), Docker);
-        assert_eq!(Environment::from_str_or_unknown("Binary"), Binary);
-        assert_eq!(Environment::from_str_or_unknown("Test"), Test);
-        assert_eq!(Environment::from_str_or_unknown("Legacy"), Legacy);
-    }
-
-    #[test]
-    fn snapshot_test_environment_from_envvar() {
-        assert_eq!(Environment::from_envvar_or_unknown("umbrel"), Umbrel);
-        assert_eq!(
-            Environment::from_envvar_or_unknown("raspiblitz"),
-            RaspiBlitz
-        );
-        assert_eq!(Environment::from_envvar_or_unknown("docker"), Docker);
+        assert_eq!(Environment::from_str_or_unknown("umbrel"), Umbrel);
+        assert_eq!(Environment::from_str_or_unknown("raspiblitz"), RaspiBlitz);
+        assert_eq!(Environment::from_str_or_unknown("docker"), Docker);
     }
 }
