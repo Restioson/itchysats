@@ -1,7 +1,6 @@
 use anyhow::Context;
 use daemon::bdk::bitcoin::Amount;
 use daemon::connection::ConnectionStatus;
-use daemon::connection::MAX_RECONNECT_INTERVAL_SECONDS;
 use daemon::projection::CfdOrder;
 use daemon::projection::CfdState;
 use daemon::projection::MakerOffers;
@@ -628,16 +627,14 @@ async fn open_cfd_is_refunded() {
 
 #[tokio::test]
 async fn taker_notices_lack_of_maker() {
-    let short_interval = Duration::from_secs(1);
-
     let _guard = init_tracing();
 
     let maker_config = MakerConfig::default()
-        .with_heartbeat_interval(short_interval)
-        .with_dedicated_port(35123); // set a fixed port so the taker can reconnect
+        .with_dedicated_port(35123)
+        .with_dedicated_libp2p_port(35124); // set fixed ports so the taker can reconnect
     let maker = Maker::start(&maker_config).await;
 
-    let taker_config = TakerConfig::default().with_heartbeat_interval(short_interval);
+    let taker_config = TakerConfig::default();
     let mut taker = Taker::start(
         &taker_config,
         maker.listen_addr,
@@ -646,6 +643,8 @@ async fn taker_notices_lack_of_maker() {
     )
     .await;
 
+    sleep(Duration::from_secs(5)).await; // wait a bit until taker notices change
+
     assert_eq!(
         ConnectionStatus::Online,
         next(taker.maker_status_feed()).await.unwrap()
@@ -653,7 +652,7 @@ async fn taker_notices_lack_of_maker() {
 
     drop(maker);
 
-    sleep(taker_config.heartbeat_interval).await;
+    sleep(Duration::from_secs(5)).await; // wait a bit until taker notices change
 
     assert_eq!(
         ConnectionStatus::Offline { reason: None },
@@ -662,8 +661,7 @@ async fn taker_notices_lack_of_maker() {
 
     let _maker = Maker::start(&maker_config).await;
 
-    sleep(Duration::from_secs(MAX_RECONNECT_INTERVAL_SECONDS) + taker_config.heartbeat_interval)
-        .await;
+    sleep(Duration::from_secs(5)).await; // wait a bit until taker notices change
 
     assert_eq!(
         ConnectionStatus::Online,

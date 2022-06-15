@@ -83,13 +83,6 @@ pub struct MakerConfig {
 }
 
 impl MakerConfig {
-    pub fn with_heartbeat_interval(self, interval: Duration) -> Self {
-        Self {
-            heartbeat_interval: interval,
-            ..self
-        }
-    }
-
     pub fn with_dedicated_port(self, port: u16) -> Self {
         Self {
             dedicated_port: Some(port),
@@ -122,17 +115,7 @@ impl Default for MakerConfig {
 pub struct TakerConfig {
     oracle_pk: schnorrsig::PublicKey,
     seed: RandomSeed,
-    pub heartbeat_interval: Duration,
     n_payouts: usize,
-}
-
-impl TakerConfig {
-    pub fn with_heartbeat_interval(self, timeout: Duration) -> Self {
-        Self {
-            heartbeat_interval: timeout,
-            ..self
-        }
-    }
 }
 
 impl Default for TakerConfig {
@@ -140,7 +123,6 @@ impl Default for TakerConfig {
         Self {
             oracle_pk: oracle_pk(),
             seed: RandomSeed::default(),
-            heartbeat_interval: HEARTBEAT_INTERVAL,
             n_payouts: N_PAYOUTS,
         }
     }
@@ -386,7 +368,6 @@ impl Taker {
             },
             move || price_feed.clone(),
             config.n_payouts,
-            config.heartbeat_interval,
             Duration::from_secs(10),
             projection_actor,
             maker_identity,
