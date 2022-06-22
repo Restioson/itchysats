@@ -198,13 +198,13 @@ async fn taker_takes_order_and_maker_rejects() {
         .await
         .unwrap();
 
-    let order_id = received.short.unwrap().id;
+    let offer_id = received.short.unwrap().id;
 
     taker.mocks.mock_oracle_announcement().await;
     maker.mocks.mock_oracle_announcement().await;
-    taker
+    let order_id = taker
         .system
-        .take_offer(order_id, Usd::new(dec!(10)), Leverage::TWO)
+        .place_order(offer_id, Usd::new(dec!(10)), Leverage::TWO)
         .await
         .unwrap();
 
@@ -213,57 +213,6 @@ async fn taker_takes_order_and_maker_rejects() {
     maker.system.reject_order(order_id).await.unwrap();
 
     wait_next_state!(order_id, maker, taker, CfdState::Rejected);
-}
-
-#[tokio::test]
-async fn another_offer_is_automatically_created_after_taker_takes_order() {
-    let _guard = init_tracing();
-    let (mut maker, mut taker) = start_both().await;
-
-    is_next_offers_none(taker.offers_feed()).await.unwrap();
-
-    maker
-        .set_offer_params(dummy_offer_params(Position::Short))
-        .await;
-
-    let (_, received) = next_maker_offers(maker.offers_feed(), taker.offers_feed())
-        .await
-        .unwrap();
-
-    let order_id_take = received.short.unwrap().id;
-
-    taker.mocks.mock_oracle_announcement().await;
-    maker.mocks.mock_oracle_announcement().await;
-    taker
-        .system
-        .take_offer(order_id_take, Usd::new(dec!(10)), Leverage::TWO)
-        .await
-        .unwrap();
-
-    // For the taker the offer is reset after taking it, so we can't take the same one twice
-    is_next_offers_none(taker.offers_feed()).await.unwrap();
-
-    let (maker_update, taker_update) = next_maker_offers(maker.offers_feed(), taker.offers_feed())
-        .await
-        .unwrap();
-
-    let new_order_id_maker = maker_update.short.unwrap().id;
-    let new_order_id_taker = taker_update.short.unwrap().id;
-
-    assert_ne!(
-        new_order_id_taker, order_id_take,
-        "Another offer should be available, and it should have a different id than first one"
-    );
-
-    assert_ne!(
-        new_order_id_maker, order_id_take,
-        "Another offer should be available, and it should have a different id than first one"
-    );
-
-    assert_eq!(
-        new_order_id_taker, new_order_id_maker,
-        "Both parties have the same new id"
-    )
 }
 
 #[tokio::test]
@@ -281,14 +230,14 @@ async fn taker_takes_order_and_maker_accepts_and_contract_setup() {
         .await
         .unwrap();
 
-    let order_id = received.short.unwrap().id;
+    let offer_id = received.short.unwrap().id;
 
     taker.mocks.mock_oracle_announcement().await;
     maker.mocks.mock_oracle_announcement().await;
 
-    taker
+    let order_id = taker
         .system
-        .take_offer(order_id, Usd::new(dec!(5)), Leverage::TWO)
+        .place_order(offer_id, Usd::new(dec!(5)), Leverage::TWO)
         .await
         .unwrap();
     wait_next_state!(order_id, maker, taker, CfdState::PendingSetup);
@@ -725,19 +674,21 @@ async fn start_from_open_cfd_state(
         .mock_oracle_announcement_with(announcement)
         .await;
 
-    let order_to_take = match position_maker {
+    let offer_to_take = match position_maker {
         Position::Short => received.short,
         Position::Long => received.long,
     }
     .context("Order for expected position not set")
     .unwrap();
 
-    taker
+    let offer_id = offer_to_take.id;
+
+    let order_id = taker
         .system
-        .take_offer(order_to_take.id, Usd::new(dec!(5)), Leverage::TWO)
+        .place_order(offer_id, Usd::new(dec!(5)), Leverage::TWO)
         .await
         .unwrap();
-    wait_next_state!(order_to_take.id, maker, taker, CfdState::PendingSetup);
+    wait_next_state!(order_id, maker, taker, CfdState::PendingSetup);
 
     maker.mocks.mock_party_params().await;
     taker.mocks.mock_party_params().await;
@@ -745,14 +696,14 @@ async fn start_from_open_cfd_state(
     maker.mocks.mock_wallet_sign_and_broadcast().await;
     taker.mocks.mock_wallet_sign_and_broadcast().await;
 
-    maker.system.accept_order(order_to_take.id).await.unwrap();
-    wait_next_state!(order_to_take.id, maker, taker, CfdState::ContractSetup);
+    maker.system.accept_order(order_id).await.unwrap();
+    wait_next_state!(order_id, maker, taker, CfdState::ContractSetup);
 
     sleep(Duration::from_secs(5)).await; // need to wait a bit until both transition
-    wait_next_state!(order_to_take.id, maker, taker, CfdState::PendingOpen);
+    wait_next_state!(order_id, maker, taker, CfdState::PendingOpen);
 
-    confirm!(lock transaction, order_to_take.id, maker, taker);
-    wait_next_state!(order_to_take.id, maker, taker, CfdState::Open);
+    confirm!(lock transaction, order_id, maker, taker);
+    wait_next_state!(order_id, maker, taker, CfdState::Open);
 
-    (maker, taker, order_to_take.id)
+    (maker, taker, order_id)
 }
