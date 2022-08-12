@@ -28,5 +28,10 @@ tracing = "0.1"
 x25519-dalek = "1.1"
 
 [dev-dependencies]
+opentelemetry = "0.17.0"
+otel-tests = { path = "../otel-tests", features = ["otlp"] }
 pretty_assertions = "1"
 tokio = { version = "1", features = ["macros", "tracing"] }
+
+[[example]]
+name = "bench"

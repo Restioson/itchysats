@@ -4270,6 +4270,8 @@ dependencies = [
  "maia 0.2.0",
  "maia-core",
  "model",
+ "opentelemetry",
+ "otel-tests",
  "pretty_assertions",
  "rust_decimal",
  "rust_decimal_macros",
