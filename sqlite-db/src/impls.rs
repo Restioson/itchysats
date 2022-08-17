@@ -3,6 +3,7 @@ use model::CfdEvent;
 impl crate::CfdAggregate for model::Cfd {
     type CtorArgs = ();
 
+    // TODO(restioson): separate dlc loading
     fn new(
         _: Self::CtorArgs,
         crate::Cfd {

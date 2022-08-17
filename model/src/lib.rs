@@ -33,6 +33,7 @@ mod contract_setup;
 pub mod hex_transaction;
 pub mod libp2p;
 pub mod olivia;
+mod order;
 mod payouts;
 mod rollover;
 pub mod shared_protocol;

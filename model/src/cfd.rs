@@ -1,8 +1,8 @@
-use crate::contract_setup::SetupParams;
 use crate::hex_transaction;
 use crate::libp2p::PeerId;
 use crate::olivia;
 use crate::olivia::BitMexPriceEventId;
+use crate::order::Order;
 use crate::payouts::Payouts;
 use crate::rollover;
 use crate::rollover::BaseDlcParams;
@@ -349,8 +349,6 @@ pub struct SettlementProposal {
 pub enum CannotRollover {
     #[error("Is too recent to auto-rollover")]
     TooRecent,
-    #[error("CFD does not have a DLC")]
-    NoDlc,
     #[error("Cannot roll over when CFD not locked yet")]
     NotLocked,
     #[error("Cannot roll over when CFD is committed")]
@@ -563,7 +561,8 @@ impl EventKind {
     }
 }
 
-/// Models the cfd state of the taker
+/// Models the cfd state of the taker. This is essentially an [`Order`] with a [`Dlc`], and other
+/// state which is only relevant once the [`Order`] is set up as a contract.
 ///
 /// Upon `Command`s, that are reaction to something happening in the system, we decide to
 /// produce `Event`s that are saved in the database. After saving an `Event` in the database
@@ -574,26 +573,11 @@ impl EventKind {
 pub struct Cfd {
     version: u32,
 
-    // static
-    id: OrderId,
-    offer_id: OfferId,
-    position: Position,
-    initial_price: Price,
-    initial_funding_rate: FundingRate,
-    long_leverage: Leverage,
-    short_leverage: Leverage,
-    settlement_interval: Duration,
-    quantity: Usd,
-    counterparty_network_identity: Identity,
-    counterparty_peer_id: Option<PeerId>,
-    role: Role,
-    opening_fee: OpeningFee,
-    initial_tx_fee_rate: TxFeeRate,
-    contract_symbol: ContractSymbol,
+    order: Order,
+    dlc: Dlc,
+
     // dynamic (based on events)
     fee_account: FeeAccount,
-
-    dlc: Option<Dlc>,
 
     /// Holds the decrypted CET transaction if we have previously emitted it as part of an event.
     ///
@@ -645,6 +629,7 @@ impl Cfd {
         initial_funding_rate: FundingRate,
         initial_tx_fee_rate: TxFeeRate,
         contract_symbol: ContractSymbol,
+        dlc: Dlc,
     ) -> Self {
         let (long_leverage, short_leverage) =
             long_and_short_leverage(taker_leverage, role, position);
@@ -661,22 +646,26 @@ impl Cfd {
 
         Cfd {
             version: 0,
-            id,
-            offer_id,
-            position,
-            initial_price,
-            long_leverage,
-            short_leverage,
-            settlement_interval,
-            quantity,
-            counterparty_network_identity,
-            counterparty_peer_id,
-            role,
-            initial_funding_rate,
-            opening_fee,
-            initial_tx_fee_rate,
-            contract_symbol,
-            dlc: None,
+            order: Order::new(
+                id,
+                offer_id,
+                position,
+                initial_price,
+                taker_leverage,
+                settlement_interval,
+                role,
+                quantity,
+                counterparty_network_identity,
+                counterparty_peer_id,
+                opening_fee,
+                initial_funding_rate,
+                initial_tx_fee_rate,
+                contract_symbol,
+            ),
+            dlc,
+            fee_account: FeeAccount::new(position, role)
+                .add_opening_fee(opening_fee)
+                .add_funding_fee(initial_funding_fee),
             cet: None,
             commit_tx: None,
             collaborative_settlement_spend_tx: None,
@@ -691,71 +680,11 @@ impl Cfd {
             during_contract_setup: false,
             during_rollover: false,
             settlement_proposal: None,
-            fee_account: FeeAccount::new(position, role)
-                .add_opening_fee(opening_fee)
-                .add_funding_fee(initial_funding_fee),
         }
     }
 
-    /// A convenience method, creating a Cfd from an Order
-    pub fn from_order(
-        order_id: OrderId,
-        offer: &Offer,
-        quantity: Usd,
-        counterparty_network_identity: Identity,
-        counterparty_peer_id: Option<PeerId>,
-        role: Role,
-        taker_leverage: Leverage,
-    ) -> Self {
-        let position = match role {
-            Role::Maker => offer.position_maker,
-            Role::Taker => offer.position_maker.counter_position(),
-        };
-
-        Cfd::new(
-            order_id,
-            offer.id,
-            position,
-            offer.price,
-            taker_leverage,
-            offer.settlement_interval,
-            role,
-            quantity,
-            counterparty_network_identity,
-            counterparty_peer_id,
-            offer.opening_fee,
-            offer.funding_rate,
-            offer.tx_fee_rate,
-            offer.contract_symbol,
-        )
-    }
-
-    fn expiry_timestamp(&self) -> Option<OffsetDateTime> {
-        self.dlc
-            .as_ref()
-            .map(|dlc| dlc.settlement_event_id.timestamp())
-    }
-
-    fn margin(&self) -> Amount {
-        match self.position {
-            Position::Long => {
-                calculate_margin(self.initial_price, self.quantity, self.long_leverage)
-            }
-            Position::Short => {
-                calculate_margin(self.initial_price, self.quantity, self.short_leverage)
-            }
-        }
-    }
-
-    fn counterparty_margin(&self) -> Amount {
-        match self.position {
-            Position::Long => {
-                calculate_margin(self.initial_price, self.quantity, self.short_leverage)
-            }
-            Position::Short => {
-                calculate_margin(self.initial_price, self.quantity, self.long_leverage)
-            }
-        }
+    fn expiry_timestamp(&self) -> OffsetDateTime {
+        self.dlc.settlement_event_id.timestamp()
     }
 
     fn is_in_collaborative_settlement(&self) -> bool {
@@ -770,7 +699,7 @@ impl Cfd {
         &self,
         now: OffsetDateTime,
     ) -> Result<(Txid, BitMexPriceEventId), CannotRollover> {
-        let expiry_timestamp = self.expiry_timestamp().ok_or(CannotRollover::NoDlc)?;
+        let expiry_timestamp = self.expiry_timestamp();
         let time_until_expiry = expiry_timestamp - now;
         if time_until_expiry > SETTLEMENT_INTERVAL - Duration::HOUR {
             return Err(CannotRollover::TooRecent);
@@ -778,9 +707,7 @@ impl Cfd {
 
         self.can_rollover()?;
 
-        let dlc = self.dlc.as_ref().ok_or(CannotRollover::NoDlc)?;
-
-        Ok((dlc.commit.0.txid(), dlc.settlement_event_id))
+        Ok((self.dlc.commit.0.txid(), self.dlc.settlement_event_id))
     }
 
     fn can_rollover(&self) -> Result<(), CannotRollover> {
@@ -862,32 +789,6 @@ impl Cfd {
             || self.is_refunded()
     }
 
-    pub fn start_contract_setup(&self) -> Result<(CfdEvent, SetupParams, Position)> {
-        if self.version > 0 {
-            bail!("Start contract not allowed in version {}", self.version)
-        }
-
-        let margin = self.margin();
-        let counterparty_margin = self.counterparty_margin();
-
-        Ok((
-            CfdEvent::new(self.id(), EventKind::ContractSetupStarted),
-            SetupParams::new(
-                margin,
-                counterparty_margin,
-                self.counterparty_network_identity,
-                self.initial_price,
-                self.quantity,
-                self.long_leverage,
-                self.short_leverage,
-                self.refund_timelock_in_blocks(),
-                self.initial_tx_fee_rate(),
-                self.fee_account,
-            )?,
-            self.position,
-        ))
-    }
-
     pub fn start_rollover_deprecated(&self) -> Result<CfdEvent> {
         if self.during_rollover {
             bail!("The CFD is already being rolled over")
@@ -895,7 +796,7 @@ impl Cfd {
 
         self.can_rollover()?;
 
-        Ok(CfdEvent::new(self.id, EventKind::RolloverStarted))
+        Ok(CfdEvent::new(self.id(), EventKind::RolloverStarted))
     }
 
     pub fn start_rollover_taker(&self) -> Result<CfdEvent> {
@@ -905,7 +806,7 @@ impl Cfd {
 
         self.can_rollover()?;
 
-        let event = CfdEvent::new(self.id, EventKind::RolloverStarted);
+        let event = CfdEvent::new(self.id(), EventKind::RolloverStarted);
 
         Ok(event)
     }
@@ -920,16 +821,13 @@ impl Cfd {
 
         self.can_rollover()?;
 
-        let dlc = self
-            .dlc
-            .as_ref()
-            .context("No DLC available when starting a rollover")?;
+        let base_dlc_params = tracing::info_span!("", order_id = %self.id()) // TODO(restioson)? this is weird!
+            .in_scope(|| {
+                self.dlc
+                    .base_dlc_params(from_txid_proposed, self.fee_account.settle())
+            })?;
 
-        let order_id = self.id;
-        let base_dlc_params = tracing::info_span!("", %order_id)
-            .in_scope(|| dlc.base_dlc_params(from_txid_proposed, self.fee_account.settle()))?;
-
-        let event = CfdEvent::new(self.id, EventKind::RolloverStarted);
+        let event = CfdEvent::new(self.id(), EventKind::RolloverStarted);
 
         Ok((event, base_dlc_params))
     }
@@ -951,31 +849,23 @@ impl Cfd {
             bail!("The CFD is not rolling over");
         }
 
-        if self.role != Role::Maker {
+        if self.role() != Role::Maker {
             bail!("Can only accept proposal as a maker");
         }
 
         let now = OffsetDateTime::now_utc();
-        let to_event_ids = olivia::hourly_events(now, now + self.settlement_interval)?;
+        let to_event_ids = olivia::hourly_events(now, now + self.settlement_time_interval_hours())?;
         let settlement_event_id = to_event_ids.last().context("Empty to_event_ids")?;
 
         // If a `from_event_id` was specified we use it, otherwise we use the
         // `settlement_event_id` of the current dlc to calculate the costs.
         let (from_event_id, rollover_fee_account) = match from_params {
-            None => {
-                let from_event_id = self
-                    .dlc
-                    .as_ref()
-                    .context("Cannot roll over without DLC")?
-                    .settlement_event_id;
-
-                (from_event_id, self.fee_account)
-            }
+            None => (self.dlc.settlement_event_id, self.fee_account),
             Some((from_event_id, from_complete_fee)) => {
                 // If we have rollover params we make sure to use the complete_fee as decided by the
                 // params
-                let rollover_fee_account =
-                    FeeAccount::new(self.position, self.role).from_complete_fee(from_complete_fee);
+                let rollover_fee_account = FeeAccount::new(self.position(), self.role())
+                    .from_complete_fee(from_complete_fee);
                 (from_event_id, rollover_fee_account)
             }
         };
@@ -991,37 +881,37 @@ impl Cfd {
         };
 
         let funding_fee = FundingFee::calculate(
-            self.initial_price,
-            self.quantity,
-            self.long_leverage,
-            self.short_leverage,
+            self.initial_price(),
+            self.quantity(),
+            self.long_leverage(),
+            self.short_leverage(),
             funding_rate,
             hours_to_charge as i64,
         )?;
 
         tracing::debug!(
-            order_id = %self.id,
+            order_id = %self.id(),
             rollover_version = %version,
             %hours_to_charge,
-            funding_fee = %funding_fee.compute_relative(self.position),
+            funding_fee = %funding_fee.compute_relative(self.position()),
             "Accepting rollover proposal"
         );
 
         Ok((
-            CfdEvent::new(self.id, EventKind::RolloverAccepted),
+            CfdEvent::new(self.id(), EventKind::RolloverAccepted),
             RolloverParams::new(
-                self.initial_price,
-                self.quantity,
-                self.long_leverage,
-                self.short_leverage,
-                self.refund_timelock_in_blocks(),
+                self.initial_price(),
+                self.quantity(),
+                self.long_leverage(),
+                self.short_leverage(),
+                self.order.refund_timelock_in_blocks(),
                 tx_fee_rate,
                 rollover_fee_account,
                 funding_fee,
                 version,
             ),
-            self.dlc.clone().context("No DLC present")?,
-            self.position,
+            self.dlc.clone(),
+            self.position(),
             to_event_ids,
         ))
     }
@@ -1037,7 +927,7 @@ impl Cfd {
             bail!("The CFD is not rolling over");
         }
 
-        if self.role != Role::Taker {
+        if self.role() != Role::Taker {
             bail!("Can only handle accepted proposal as a taker");
         }
 
@@ -1045,7 +935,7 @@ impl Cfd {
 
         let now = OffsetDateTime::now_utc();
 
-        let to_event_ids = olivia::hourly_events(now, now + self.settlement_interval)?;
+        let to_event_ids = olivia::hourly_events(now, now + self.settlement_time_interval_hours())?;
 
         ensure!(
             to_event_ids == maker_to_event_ids,
@@ -1063,10 +953,10 @@ impl Cfd {
             from_event_id,
         )?;
         let funding_fee = FundingFee::calculate(
-            self.initial_price,
-            self.quantity,
-            self.long_leverage,
-            self.short_leverage,
+            self.initial_price(),
+            self.quantity(),
+            self.long_leverage(),
+            self.short_leverage(),
             funding_rate,
             hours_to_charge as i64,
         )?;
@@ -1074,18 +964,18 @@ impl Cfd {
         Ok((
             self.event(EventKind::RolloverAccepted),
             RolloverParams::new(
-                self.initial_price,
-                self.quantity,
-                self.long_leverage,
-                self.short_leverage,
+                self.initial_price(),
+                self.quantity(),
+                self.long_leverage(),
+                self.short_leverage(),
                 self.refund_timelock_in_blocks(),
                 tx_fee_rate,
                 self.fee_account,
                 funding_fee,
                 rollover::Version::V2,
             ),
-            self.dlc.clone().context("No DLC present")?,
-            self.position,
+            self.dlc.clone(),
+            self.position(),
         ))
     }
 
@@ -1095,23 +985,19 @@ impl Cfd {
         sig_taker: Signature,
     ) -> Result<CollaborativeSettlement> {
         debug_assert_eq!(
-            self.role,
+            self.role(),
             Role::Maker,
             "Only the maker can complete collaborative settlement signing"
         );
 
-        let dlc = self
-            .dlc
-            .as_ref()
-            .context("Collaborative close without DLC")?;
-
         #[allow(deprecated)]
-        let (tx, sig_maker, lock_amount) = dlc.close_transaction(&proposal)?;
+        let (tx, sig_maker, lock_amount) = self.dlc.close_transaction(&proposal)?;
 
-        let spend_tx = dlc
+        let spend_tx = self
+            .dlc
             .finalize_spend_transaction(tx, sig_maker, sig_taker, lock_amount)
             .context("Failed to finalize collaborative settlement transaction")?;
-        let script_pk = dlc.script_pubkey_for(Role::Maker);
+        let script_pk = self.dlc.script_pubkey_for(Role::Maker);
 
         let settlement = CollaborativeSettlement::new(spend_tx, script_pk, proposal.price)?;
         Ok(settlement)
@@ -1123,7 +1009,7 @@ impl Cfd {
         n_payouts: usize,
     ) -> Result<(CfdEvent, SettlementTransaction, SettlementProposal)> {
         ensure!(!self.is_in_collaborative_settlement());
-        ensure!(self.role == Role::Taker);
+        ensure!(self.role() == Role::Taker);
         self.can_settle_collaboratively()
             .context("Cannot collaboratively settle")?;
 
@@ -1147,7 +1033,7 @@ impl Cfd {
         proposed_settlement_transaction: &Transaction,
     ) -> Result<(CfdEvent, SettlementTransaction, SettlementProposal)> {
         ensure!(!self.is_in_collaborative_settlement());
-        ensure!(self.role == Role::Maker);
+        ensure!(self.role() == Role::Maker);
         self.can_settle_collaboratively()
             .context("Cannot collaboratively settle")?;
 
@@ -1176,12 +1062,12 @@ impl Cfd {
         n_payouts: usize,
     ) -> Result<(SettlementTransaction, SettlementProposal)> {
         let payouts = Payouts::new_inverse(
-            self.position,
-            self.role,
-            self.initial_price,
-            self.quantity,
-            self.long_leverage,
-            self.short_leverage,
+            self.position(),
+            self.role(),
+            self.initial_price(),
+            self.quantity(),
+            self.long_leverage(),
+            self.short_leverage(),
             n_payouts,
             self.fee_account.settle(),
         )?
@@ -1195,20 +1081,15 @@ impl Cfd {
                 .context("find current price on the payout curve")?
         };
 
-        let dlc = self
-            .dlc
-            .as_ref()
-            .context("Collaborative close without DLC")?;
-
-        let collab_settlement_tx = dlc.collab_settlement_transaction(
+        let collab_settlement_tx = self.dlc.collab_settlement_transaction(
             *payout.maker_amount(),
             *payout.taker_amount(),
             current_price,
-            self.role,
+            self.role(),
         )?;
 
         let proposal = SettlementProposal {
-            order_id: self.id,
+            order_id: self.id(),
             taker: *payout.taker_amount(),
             maker: *payout.maker_amount(),
             price: current_price,
@@ -1223,20 +1104,20 @@ impl Cfd {
         n_payouts: usize,
     ) -> Result<CfdEvent> {
         ensure!(!self.is_in_collaborative_settlement());
-        ensure!(self.role == Role::Maker);
-        ensure!(proposal.order_id == self.id);
+        ensure!(self.role() == Role::Maker);
+        ensure!(proposal.order_id == self.id());
         self.can_settle_collaboratively()
             .context("Cannot collaboratively settle")?;
 
         // Validate that the amounts sent by the taker are sane according to the payout curve
 
         let payouts = Payouts::new_inverse(
-            self.position,
-            self.role,
-            self.initial_price,
-            self.quantity,
-            self.long_leverage,
-            self.short_leverage,
+            self.position(),
+            self.role(),
+            self.initial_price(),
+            self.quantity(),
+            self.long_leverage(),
+            self.short_leverage(),
             n_payouts,
             self.fee_account.settle(),
         )?
@@ -1255,7 +1136,7 @@ impl Cfd {
         }
 
         Ok(CfdEvent::new(
-            self.id,
+            self.id(),
             EventKind::CollaborativeSettlementStarted { proposal },
         ))
     }
@@ -1264,7 +1145,7 @@ impl Cfd {
         self,
         theirs: &SettlementProposal,
     ) -> Result<CfdEvent> {
-        ensure!(self.role == Role::Maker);
+        ensure!(self.role() == Role::Maker);
 
         let ours = self.settlement_proposal;
         ensure!(
@@ -1273,7 +1154,7 @@ impl Cfd {
         );
 
         Ok(CfdEvent::new(
-            self.id,
+            self.id(),
             EventKind::CollaborativeSettlementProposalAccepted,
         ))
     }
@@ -1286,7 +1167,11 @@ impl Cfd {
             )
         }
 
-        tracing::info!(order_id = %self.id, peer_id=?self.counterparty_peer_id, "Contract setup was completed");
+        tracing::info!(
+            order_id = %self.id(),
+            peer_id = ?self.counterparty_peer_id(),
+            "Contract setup was completed"
+        );
 
         Ok(self.event(EventKind::ContractSetupCompleted { dlc: Some(dlc) }))
     }
@@ -1298,13 +1183,21 @@ impl Cfd {
             "Rejecting contract setup not allowed because cfd in version {version}",
         );
 
-        tracing::info!(order_id = %self.id, peer_id=?self.counterparty_peer_id, "Contract setup was rejected: {reason:#}");
+        tracing::info!(
+            order_id = %self.id(),
+            peer_id = ?self.counterparty_peer_id(),
+            "Contract setup was rejected: {reason:#}"
+        );
 
         Ok(self.event(EventKind::OfferRejected))
     }
 
     pub fn fail_contract_setup(self, error: anyhow::Error) -> CfdEvent {
-        tracing::error!(order_id = %self.id, peer_id=?self.counterparty_peer_id, "Contract setup failed: {error:#}");
+        tracing::error!(
+            order_id = %self.id(),
+            peer_id = ?self.counterparty_peer_id(),
+            "Contract setup failed: {error:#}"
+        );
 
         self.event(EventKind::ContractSetupFailed)
     }
@@ -1317,7 +1210,11 @@ impl Cfd {
     ) -> CfdEvent {
         match self.can_rollover() {
             Ok(_) => {
-                tracing::info!(order_id = %self.id, peer_id=?self.counterparty_peer_id, "Rollover was completed");
+                tracing::info!(
+                    order_id = %self.id(),
+                    peer_id = ?self.counterparty_peer_id(),
+                    "Rollover was completed"
+                );
 
                 self.event(EventKind::RolloverCompleted {
                     dlc: Some(dlc),
@@ -1330,13 +1227,21 @@ impl Cfd {
     }
 
     pub fn reject_rollover(self, reason: anyhow::Error) -> CfdEvent {
-        tracing::info!(order_id = %self.id, peer_id=?self.counterparty_peer_id, "Rollover was rejected: {:#}", reason);
+        tracing::info!(
+            order_id = %self.id(),
+            peer_id = ?self.counterparty_peer_id(),
+            "Rollover was rejected: {reason:#}",
+        );
 
         self.event(EventKind::RolloverRejected)
     }
 
     pub fn fail_rollover(self, error: anyhow::Error) -> CfdEvent {
-        tracing::warn!(order_id = %self.id, peer_id=?self.counterparty_peer_id, "Rollover failed: {:#}", error);
+        tracing::warn!(
+            order_id = %self.id(),
+            peer_id = ?self.counterparty_peer_id(),
+            "Rollover failed: {error:#}",
+        );
 
         self.event(EventKind::RolloverFailed)
     }
@@ -1347,7 +1252,12 @@ impl Cfd {
     ) -> CfdEvent {
         match self.can_settle_collaboratively() {
             Ok(()) => {
-                tracing::info!(order_id=%self.id(), peer_id=?self.counterparty_peer_id, tx=%settlement.tx.txid(), "Collaborative settlement completed");
+                tracing::info!(
+                    order_id = %self.id(),
+                    peer_id = ?self.counterparty_peer_id(),
+                    tx = %settlement.tx.txid(),
+                    "Collaborative settlement completed"
+                );
 
                 self.event(EventKind::CollaborativeSettlementCompleted {
                     spend_tx: settlement.tx,
@@ -1360,17 +1270,26 @@ impl Cfd {
     }
 
     pub fn reject_collaborative_settlement(self, reason: anyhow::Error) -> CfdEvent {
-        tracing::warn!(order_id=%self.id(), peer_id=?self.counterparty_peer_id, "Collaborative settlement rejected: {reason:#}");
+        tracing::warn!(
+            order_id = %self.id(),
+            peer_id = ?self.counterparty_peer_id(),
+            "Collaborative settlement rejected: {reason:#}"
+        );
 
         self.event(EventKind::CollaborativeSettlementRejected)
     }
 
     pub fn fail_collaborative_settlement(self, error: anyhow::Error) -> CfdEvent {
-        tracing::warn!(order_id = %self.id(), peer_id=?self.counterparty_peer_id, "Collaborative settlement failed: {error:#}");
+        tracing::warn!(
+            order_id = %self.id(),
+            peer_id = ?self.counterparty_peer_id(),
+            "Collaborative settlement failed: {error:#}"
+        );
 
         self.event(EventKind::CollaborativeSettlementFailed)
     }
 
+    // TODO(restioson): this should operate on order not on cfd, maybe
     /// Given an attestation, find and decrypt the relevant CET.
     ///
     /// In case the Cfd was already closed we return `Ok(None)`, because then the attestation is not
@@ -1380,18 +1299,13 @@ impl Cfd {
             return Ok(None);
         }
 
-        let dlc = match self.dlc.as_ref() {
-            Some(dlc) => dlc,
-            None => return Ok(None),
-        };
-
-        let cet = match dlc.signed_cet(attestation) {
+        let cet = match self.dlc.signed_cet(attestation) {
             Ok(cet) => cet,
             Err(SignCetError::IrrelevantAttestation { .. }) => {
                 return Ok(None);
             }
             Err(SignCetError::PriceOutOfRange { id, .. })
-                if dlc.liquidation_event_ids().contains(&id) =>
+                if self.dlc.liquidation_event_ids().contains(&id) =>
             {
                 return Ok(None);
             }
@@ -1411,7 +1325,7 @@ impl Cfd {
         // If we haven't yet emitted the commit tx, we need to emit it now.
         let commit_tx_to_emit = match self.commit_tx {
             Some(_) => None,
-            None => Some(dlc.signed_commit_tx()?),
+            None => Some(self.dlc.signed_commit_tx()?),
         };
 
         Ok(Some(self.event(
@@ -1441,8 +1355,8 @@ impl Cfd {
             return Ok(None);
         }
 
-        let dlc = self.dlc.as_ref().context("CFD does not have a DLC")?;
-        let refund_tx = dlc
+        let refund_tx = self
+            .dlc
             .signed_refund_tx()
             .context("Failed to sign refund transaction")?;
 
@@ -1473,7 +1387,7 @@ impl Cfd {
     }
 
     pub fn handle_refund_confirmed(self) -> CfdEvent {
-        tracing::info!(order_id=%self.id, "Refund transaction confirmed");
+        tracing::info!(order_id=%self.id(), "Refund transaction confirmed");
 
         self.event(EventKind::RefundConfirmed)
     }
@@ -1485,96 +1399,82 @@ impl Cfd {
     pub fn manual_commit_to_blockchain(&self) -> Result<CfdEvent> {
         ensure!(!self.is_closed());
 
-        let dlc = self.dlc.as_ref().context("Cannot commit without a DLC")?;
-
         Ok(self.event(EventKind::ManualCommit {
-            tx: dlc.signed_commit_tx()?,
+            tx: self.dlc.signed_commit_tx()?,
         }))
     }
 
     fn event(&self, event: EventKind) -> CfdEvent {
-        CfdEvent::new(self.id, event)
+        CfdEvent::new(self.id(), event)
     }
 
-    /// A factor to be added to the CFD order settlement_interval for calculating the
-    /// refund timelock.
-    ///
-    /// The refund timelock is important in case the oracle disappears or never publishes a
-    /// signature. Ideally, both users collaboratively settle in the refund scenario. This
-    /// factor is important if the users do not settle collaboratively.
-    /// `1.5` times the settlement_interval as defined in CFD order should be safe in the
-    /// extreme case where a user publishes the commit transaction right after the contract was
-    /// initialized. In this case, the oracle still has `1.0 *
-    /// cfdorder.settlement_interval` time to attest and no one can publish the refund
-    /// transaction.
-    /// The downside is that if the oracle disappears: the users would only notice at the end
-    /// of the cfd settlement_interval. In this case the users has to wait for another
-    /// `1.5` times of the settlement_interval to get his funds back.
-    const REFUND_THRESHOLD: f32 = 1.5;
-
-    fn refund_timelock_in_blocks(&self) -> u32 {
-        (self.settlement_interval * Self::REFUND_THRESHOLD)
-            .as_blocks()
-            .ceil() as u32
-    }
-
+    // TODO(restioson): why?
     pub fn id(&self) -> OrderId {
-        self.id
+        self.order.id()
     }
 
     pub fn offer_id(&self) -> OfferId {
-        self.offer_id
+        self.order.offer_id()
     }
 
     pub fn position(&self) -> Position {
-        self.position
+        self.order.position()
     }
 
     pub fn initial_price(&self) -> Price {
-        self.initial_price
+        self.order.initial_price()
     }
 
     pub fn taker_leverage(&self) -> Leverage {
-        match (self.role, self.position) {
-            (Role::Taker, Position::Long) | (Role::Maker, Position::Short) => self.long_leverage,
-            (Role::Taker, Position::Short) | (Role::Maker, Position::Long) => self.short_leverage,
-        }
+        self.order.taker_leverage()
+    }
+
+    pub fn long_leverage(&self) -> Leverage {
+        self.order.long_leverage()
+    }
+
+    pub fn short_leverage(&self) -> Leverage {
+        self.order.short_leverage()
     }
 
     pub fn settlement_time_interval_hours(&self) -> Duration {
-        self.settlement_interval
+        self.order.settlement_time_interval_hours()
     }
 
     pub fn quantity(&self) -> Usd {
-        self.quantity
+        self.order.quantity()
     }
 
     pub fn counterparty_network_identity(&self) -> Identity {
-        self.counterparty_network_identity
+        self.order.counterparty_network_identity()
     }
 
     pub fn counterparty_peer_id(&self) -> Option<PeerId> {
-        self.counterparty_peer_id
+        self.order.counterparty_peer_id()
     }
 
     pub fn role(&self) -> Role {
-        self.role
+        self.order.role()
     }
 
     pub fn initial_funding_rate(&self) -> FundingRate {
-        self.initial_funding_rate
+        self.order.initial_funding_rate()
     }
 
     pub fn initial_tx_fee_rate(&self) -> TxFeeRate {
-        self.initial_tx_fee_rate
+        self.order.initial_tx_fee_rate()
     }
 
     pub fn contract_symbol(&self) -> ContractSymbol {
-        self.contract_symbol
+        self.order.contract_symbol()
     }
 
     pub fn opening_fee(&self) -> OpeningFee {
-        self.opening_fee
+        self.order.opening_fee()
+    }
+
+    pub fn refund_timelock_in_blocks(&self) -> u32 {
+        self.order.refund_timelock_in_blocks()
     }
 
     /// Check whether PeerId matches the one the CFD got created with
@@ -1601,8 +1501,7 @@ impl Cfd {
     /// so that the non-collaborative settlement time is set to ~24
     /// hours in the future from now.
     fn hours_to_extend_in_rollover(&self, now: OffsetDateTime) -> Result<u64> {
-        let dlc = self.dlc.as_ref().context("Cannot roll over without DLC")?;
-        let settlement_time = dlc.settlement_event_id.timestamp();
+        let settlement_time = self.dlc.settlement_event_id.timestamp();
 
         let hours_left = settlement_time - now;
 
@@ -1677,8 +1576,13 @@ impl Cfd {
 
         match evt.event {
             ContractSetupStarted => self.during_contract_setup = true,
-            ContractSetupCompleted { dlc } => {
-                self.dlc = dlc;
+            ContractSetupCompleted {
+                dlc
+            } => {
+                // TODO(restioson): separate dlc loading
+                if let Some(dlc) = dlc {
+                    self.dlc = dlc;
+                }
                 self.during_contract_setup = false;
             }
             OracleAttestedPostCetTimelock { cet, .. } => self.cet = Some(cet),
@@ -1704,7 +1608,11 @@ impl Cfd {
                 funding_fee,
                 complete_fee,
             } => {
-                self.dlc = dlc;
+                // TODO(restioson): separate dlc loading
+                if let Some(dlc) = dlc {
+                    self.dlc = dlc;
+                }
+
                 self.during_rollover = false;
 
                 // If the complete fee is available then we just set it, otherwise we accumulate the
@@ -1749,7 +1657,7 @@ impl Cfd {
             }
             ManualCommit { tx } => self.commit_tx = Some(tx),
             RevokeConfirmed => {
-                tracing::error!(order_id = %self.id, "Revoked logic not implemented");
+                tracing::error!(order_id = %self.id(), "Revoked logic not implemented");
                 // TODO: we should punish the other party instead. For now, we pretend we are in
                 // commit finalized and will receive our money based on an old CET.
                 self.commit_finality = true;
@@ -2395,9 +2303,10 @@ impl Dlc {
         )
         .context("could not obtain sighash")?;
         let our_sig = SECP256K1.sign_ecdsa(&sig_hash, &self.identity);
-        let our_pubkey = bitcoin::util::key::PublicKey::new(
-            bdk::bitcoin::secp256k1::PublicKey::from_secret_key(SECP256K1, &self.identity),
-        );
+        let our_pubkey = PublicKey::new(bitcoin::secp256k1::PublicKey::from_secret_key(
+            SECP256K1,
+            &self.identity,
+        ));
 
         let counterparty_sig = encsig
             .decrypt(&decryption_sk)
@@ -4185,7 +4094,7 @@ mod tests {
             let (sk_taker, pk_taker) = taker_keys;
             let (sk_maker, pk_maker) = maker_keys;
 
-            match self.role {
+            match self.role() {
                 Role::Taker => {
                     let taker_margin = self.margin();
                     let maker_margin = self.counterparty_margin();

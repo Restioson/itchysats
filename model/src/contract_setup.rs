@@ -4,7 +4,6 @@ use crate::Leverage;
 use crate::Price;
 use crate::TxFeeRate;
 use crate::Usd;
-use anyhow::Result;
 use bdk::bitcoin::Amount;
 
 #[derive(Clone, Copy, Debug)]
@@ -34,8 +33,8 @@ impl SetupParams {
         refund_timelock: u32,
         tx_fee_rate: TxFeeRate,
         fee_account: FeeAccount,
-    ) -> Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             margin,
             counterparty_margin,
             counterparty_identity,
@@ -46,7 +45,7 @@ impl SetupParams {
             refund_timelock,
             tx_fee_rate,
             fee_account,
-        })
+        }
     }
 
     pub fn counterparty_identity(&self) -> Identity {
