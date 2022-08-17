@@ -18,14 +18,13 @@ use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::str::FromStr;
 
-/// Load RolloverCompleted event data
+/// Load the latest `RolloverCompleted` event data for the given cfd.
 ///
 /// Returns Ok(Some(..)) if one was found or Ok(None) if none was found.
 /// In error case, it returns Err(..)
 pub async fn load(
     conn: &mut SqliteConnection,
     cfd_row_id: i64,
-    event_row_id: i64,
 ) -> Result<Option<(Dlc, FundingFee, Option<CompleteFee>)>> {
     let revoked_commit = load_revoked_commit_transactions(&mut *conn, cfd_row_id).await?;
     let cets = load_cets(&mut *conn, cfd_row_id).await?;
@@ -59,11 +58,9 @@ pub async fn load(
             FROM
                 rollover_completed_event_data
             WHERE
-                cfd_id = $1 and
-                event_id = $2
+                cfd_id = $1
             "#,
         cfd_row_id,
-        event_row_id,
     )
     .fetch_optional(&mut *conn)
     .await?;

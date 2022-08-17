@@ -23,7 +23,7 @@ use time::Duration;
 
 /// Models an order. An order is a CFD-to-be which does not necessarily have a DLC yet. It does
 /// not ever change.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Order {
     id: OrderId,
     offer_id: OfferId,

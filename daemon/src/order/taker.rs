@@ -23,8 +23,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use libp2p_core::PeerId;
 use maia_core::PartyParams;
-use model::olivia;
-use model::Cfd;
+use model::{olivia, Order};
 use model::Identity;
 use model::Leverage;
 use model::Offer;
@@ -107,7 +106,9 @@ impl Actor {
                 } = msg;
 
                 let oracle_event_id = offer.oracle_event_id;
-                let cfd = Cfd::from_order(
+
+                // TODO(restioson): not a CFD yet
+                let order = Order::from_taken_offer(
                     order_id,
                     &offer,
                     quantity,

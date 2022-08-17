@@ -23,7 +23,6 @@ use futures::SinkExt;
 use futures::StreamExt;
 use maia_core::PartyParams;
 use model::olivia;
-use model::Cfd;
 use model::Identity;
 use model::MakerOffers;
 use model::Offer;
@@ -181,7 +180,7 @@ impl Actor {
 
         let oracle_event_id = offer.oracle_event_id;
 
-        let cfd = Cfd::from_order(
+        let order = Offer::from_taken_offer(
             order_id,
             &offer,
             quantity,
@@ -193,6 +192,7 @@ impl Actor {
             leverage,
         );
 
+        // TODO(restioson): not a CFD yet
         // If this fails we shouldn't try to append
         // `ContractSetupFailed` to the nonexistent CFD
         if let Err(e) = self.db.insert_cfd(&cfd).await {
@@ -245,6 +245,7 @@ impl Actor {
                     }
                 }
 
+                // TODO(restioson): not a CFD yet
                 let (setup_params, position) = executor
                     .execute(order_id, |cfd| cfd.start_contract_setup())
                     .await?;

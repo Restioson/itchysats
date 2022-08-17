@@ -17,7 +17,7 @@ use crate::derive_known_peer_id;
 use crate::event_log::EventLog;
 use crate::event_log::EventLogEntry;
 use crate::load_cfd_events;
-use crate::load_cfd_row;
+use crate::load_cfd_row_and_dlc;
 use crate::models;
 use crate::Cfd;
 use crate::CfdAggregate;
@@ -56,7 +56,7 @@ impl Connection {
                 let mut conn = pool.acquire().await?;
                 let mut db_tx = conn.begin().await?;
 
-                let cfd = load_cfd_row(&mut db_tx, id).await?;
+                let cfd = load_cfd_row_and_dlc(&mut db_tx, id).await?;
 
                 let events = load_cfd_events(&mut db_tx, id, 0).await?;
                 let event_log = EventLog::new(&events);

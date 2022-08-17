@@ -11,7 +11,7 @@ impl crate::CfdAggregate for model::Cfd {
             offer_id,
             position,
             initial_price,
-            taker_leverage: leverage,
+            taker_leverage,
             settlement_interval,
             counterparty_network_identity,
             counterparty_peer_id,
@@ -21,6 +21,7 @@ impl crate::CfdAggregate for model::Cfd {
             initial_funding_rate,
             initial_tx_fee_rate,
             contract_symbol,
+            dlc,
         }: crate::Cfd,
     ) -> Self {
         model::Cfd::new(
@@ -28,7 +29,7 @@ impl crate::CfdAggregate for model::Cfd {
             offer_id,
             position,
             initial_price,
-            leverage,
+            taker_leverage,
             settlement_interval,
             role,
             quantity_usd,
@@ -38,6 +39,7 @@ impl crate::CfdAggregate for model::Cfd {
             initial_funding_rate,
             initial_tx_fee_rate,
             contract_symbol,
+            dlc,
         )
     }
 

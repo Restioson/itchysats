@@ -40,6 +40,7 @@ pub mod shared_protocol;
 pub mod transaction_ext;
 
 pub use cfd::*;
+pub use order::*;
 pub use contract_setup::SetupParams;
 pub use payouts::OraclePayouts;
 pub use payouts::Payouts;

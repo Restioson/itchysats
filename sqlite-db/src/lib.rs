@@ -10,6 +10,7 @@ use futures::Stream;
 use model::libp2p::PeerId;
 use model::CfdEvent;
 use model::ContractSymbol;
+use model::Dlc;
 use model::EventKind;
 use model::FundingRate;
 use model::Identity;
@@ -305,7 +306,7 @@ impl Connection {
             None => {
                 // No cache entry? Load the CFD row. Version will be 0 because we haven't applied
                 // any events, thus all events will be loaded.
-                let cfd = load_cfd_row(&mut db_tx, id).await?;
+                let cfd = load_cfd_row_and_dlc(&mut db_tx, id).await?;
 
                 C::new(args, cfd)
             }
@@ -510,7 +511,7 @@ impl Connection {
 
 // TODO: Make sqlx directly instantiate this struct instead of mapping manually. Need to create
 // newtype for `settlement_interval`.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Cfd {
     pub id: OrderId,
     pub offer_id: OfferId,
@@ -526,12 +527,15 @@ pub struct Cfd {
     pub initial_funding_rate: FundingRate,
     pub initial_tx_fee_rate: TxFeeRate,
     pub contract_symbol: ContractSymbol,
+    pub dlc: Dlc,
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("The CFD requested was not found in the open CFDs")]
     OpenCfdNotFound,
+    #[error("The CFD requested did not have a DLC")]
+    NoDlc,
     #[error("{0:#}")]
     Sqlx(#[source] sqlx::Error),
     #[error("{0:#}")]
@@ -550,6 +554,12 @@ impl From<anyhow::Error> for Error {
     }
 }
 
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Error::Other(e.into())
+    }
+}
+
 /// A trait for abstracting over an aggregate.
 ///
 /// Aggregating all available events differs based on the module. Thus, to provide a single
@@ -563,13 +573,13 @@ pub trait CfdAggregate: Clone + Send + Sync + 'static {
     fn version(&self) -> u32;
 }
 
-async fn load_cfd_row(conn: &mut SqliteConnection, id: OrderId) -> Result<Cfd, Error> {
+async fn load_cfd_row_and_dlc(conn: &mut SqliteConnection, id: OrderId) -> Result<Cfd, Error> {
     let id = models::OrderId::from(id);
 
     let cfd_row = sqlx::query!(
         r#"
             select
-                id as cfd_id,
+                id as "cfd_id!",
                 order_id as "order_id: models::OrderId",
                 offer_id as "offer_id: models::OfferId",
                 position as "position: models::Position",
@@ -605,6 +615,8 @@ async fn load_cfd_row(conn: &mut SqliteConnection, id: OrderId) -> Result<Cfd, E
         Some(cfd_row.counterparty_peer_id.into())
     };
 
+    let dlc = load_dlc(&mut *conn, cfd_row.cfd_id).await?;
+
     Ok(Cfd {
         id: cfd_row.order_id.into(),
         offer_id: cfd_row.offer_id.into(),
@@ -620,7 +632,43 @@ async fn load_cfd_row(conn: &mut SqliteConnection, id: OrderId) -> Result<Cfd, E
         initial_funding_rate: cfd_row.initial_funding_rate.into(),
         initial_tx_fee_rate: cfd_row.initial_tx_fee_rate.into(),
         contract_symbol: cfd_row.contract_symbol.into(),
+        dlc,
     })
+}
+
+async fn load_dlc(conn: &mut SqliteConnection, cfd_row_id: i64) -> Result<Dlc, Error> {
+    if let Some((latest_dlc, _, _)) = rollover::load(conn, cfd_row_id).await? {
+        Ok(latest_dlc)
+    } else {
+        load_contract_setup_completed(conn, cfd_row_id)
+            .await?
+            .ok_or(Error::NoDlc)
+    }
+}
+
+async fn load_contract_setup_completed(
+    conn: &mut SqliteConnection,
+    cfd_row_id: i64,
+) -> Result<Option<Dlc>, Error> {
+    let row = sqlx::query!(
+        "select events.data from events where id = $1 and name = $2",
+        cfd_row_id,
+        EventKind::CONTRACT_SETUP_COMPLETED_EVENT,
+    )
+    .fetch_optional(&mut *conn)
+    .await;
+
+    match row {
+        Ok(Some(row)) => {
+            let mut data = serde_json::from_str::<serde_json::Value>(&row.data)?;
+            match data.get_mut("dlc").map(|v| v.take()) {
+                Some(dlc_value) => Ok(Some(serde_json::from_value::<Dlc>(dlc_value)?)),
+                None => Ok(None),
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(Error::Sqlx(e)),
+    }
 }
 
 /// Derive the peer id for known makers
@@ -663,7 +711,7 @@ async fn load_cfd_events(
 ) -> Result<Vec<CfdEvent>> {
     let id = models::OrderId::from(id);
 
-    let mut events = sqlx::query!(
+    let events = sqlx::query!(
         r#"
 
         select
@@ -700,20 +748,6 @@ async fn load_cfd_events(
         ))
     })
     .collect::<Result<Vec<(i64, i64, CfdEvent)>>>()?;
-
-    for (cfd_row_id, event_row_id, event) in events.iter_mut() {
-        if let RolloverCompleted { .. } = event.event {
-            if let Some((dlc, funding_fee, complete_fee)) =
-                rollover::load(&mut *conn, *cfd_row_id, *event_row_id).await?
-            {
-                event.event = RolloverCompleted {
-                    dlc: Some(dlc),
-                    funding_fee,
-                    complete_fee,
-                }
-            }
-        }
-    }
 
     let events = events
         .into_iter()
@@ -805,7 +839,7 @@ mod tests {
             initial_funding_rate,
             initial_tx_fee_rate,
             contract_symbol,
-        } = load_cfd_row(&mut *conn, cfd.id()).await.unwrap();
+        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
 
         assert_eq!(cfd.id(), id);
         assert_eq!(cfd.offer_id(), offer_id);
@@ -870,7 +904,7 @@ mod tests {
         let super::Cfd {
             counterparty_peer_id,
             ..
-        } = load_cfd_row(&mut *conn, cfd.id()).await.unwrap();
+        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
 
         assert_eq!(cfd.counterparty_peer_id(), counterparty_peer_id);
     }
@@ -888,7 +922,7 @@ mod tests {
         let super::Cfd {
             counterparty_peer_id,
             ..
-        } = load_cfd_row(&mut *conn, cfd.id()).await.unwrap();
+        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
 
         assert_eq!(
             "12D3KooWP3BN6bq9jPy8cP7Grj1QyUBfr7U6BeQFgMwfTTu12wuY",
@@ -909,7 +943,7 @@ mod tests {
         let super::Cfd {
             counterparty_peer_id,
             ..
-        } = load_cfd_row(&mut *conn, cfd.id()).await.unwrap();
+        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
 
         assert_eq!(
             "12D3KooWEsK2X8Tp24XtyWh7DM65VfwXtNH2cmfs2JsWmkmwKbV1",
@@ -928,7 +962,7 @@ mod tests {
         let super::Cfd {
             counterparty_peer_id,
             ..
-        } = load_cfd_row(&mut *conn, cfd.id()).await.unwrap();
+        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
 
         assert_eq!(None, counterparty_peer_id);
     }
