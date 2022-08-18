@@ -115,7 +115,7 @@ impl Order {
         )
     }
 
-    fn margin(&self) -> Amount {
+    pub fn margin(&self) -> Amount {
         match self.position {
             Position::Long => {
                 calculate_margin(self.initial_price, self.quantity, self.long_leverage)
@@ -126,7 +126,7 @@ impl Order {
         }
     }
 
-    fn counterparty_margin(&self) -> Amount {
+    pub fn counterparty_margin(&self) -> Amount {
         match self.position {
             Position::Long => {
                 calculate_margin(self.initial_price, self.quantity, self.short_leverage)
@@ -143,8 +143,7 @@ impl Order {
         let margin = self.margin();
         let counterparty_margin = self.counterparty_margin();
 
-        // TODO(restioson): is this correct?
-        // TODO(restioson): extract?
+        // TODO(restioson): is this correct? extract this as a function?
         let initial_funding_fee = FundingFee::calculate(
             self.initial_price(),
             self.quantity(),
@@ -271,7 +270,6 @@ impl Order {
 mod test {
     use super::*;
     use rust_decimal_macros::dec;
-    use crate::olivia::BitMexPriceEventId;
     use crate::Origin;
 
     pub fn dummy_identity() -> Identity {

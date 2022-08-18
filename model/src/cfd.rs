@@ -1250,7 +1250,6 @@ impl Cfd {
         self.event(EventKind::CollaborativeSettlementFailed)
     }
 
-    // TODO(restioson): this should operate on order not on cfd, maybe
     /// Given an attestation, find and decrypt the relevant CET.
     ///
     /// In case the Cfd was already closed we return `Ok(None)`, because then the attestation is not
@@ -2856,7 +2855,7 @@ mod tests {
         // --|----|<--------------------rollover------------------->|--
         //                                                          now
 
-        let cfd = Cfd::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
+        let cfd = Order::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
             datetime!(2021-11-19 10:00:00).assume_utc(),
         ));
         let result = cfd.can_auto_rollover_taker(datetime!(2021-11-19 10:00:00).assume_utc());
@@ -2871,7 +2870,7 @@ mod tests {
         // --|----|<--------------------rollover------------------->|--
         //        now
 
-        let cfd = Cfd::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
+        let cfd = Order::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
             datetime!(2021-11-19 10:00:00).assume_utc(),
         ));
 
@@ -2887,7 +2886,7 @@ mod tests {
         // --|----|<--------------------rollover------------------->|--
         //    now
 
-        let cfd = Cfd::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
+        let cfd = Order::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
             datetime!(2021-11-19 10:00:00).assume_utc(),
         ));
         let cannot_roll_over = cfd
@@ -2904,7 +2903,7 @@ mod tests {
         // --|----|<--------------------rollover------------------->|--
         //  now
 
-        let cfd = Cfd::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
+        let cfd = Order::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
             datetime!(2021-11-19 10:00:00).assume_utc(),
         ));
         let cannot_roll_over = cfd
@@ -2921,7 +2920,7 @@ mod tests {
         // --|----|<--------------------rollover------------------->|--
         //       now
 
-        let cfd = Cfd::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
+        let cfd = Order::dummy_taker_long().dummy_open(BitMexPriceEventId::with_20_digits(
             datetime!(2021-11-19 10:00:00).assume_utc(),
         ));
         let cannot_roll_over = cfd
@@ -2933,8 +2932,7 @@ mod tests {
 
     #[test]
     fn given_cfd_not_locked_then_no_rollover() {
-        let cfd = Cfd::dummy_not_open_yet();
-
+        let cfd = Cfd::new(Order::dummy_not_open_yet(), Dlc::dummy(None));
         let cannot_roll_over = cfd.can_rollover().unwrap_err();
 
         assert!(matches!(cannot_roll_over, CannotRollover::NotLocked { .. }))
@@ -2987,13 +2985,13 @@ mod tests {
         let taker_keys = new_keypair();
         let maker_keys = new_keypair();
 
-        let maker_cfd = Cfd::dummy_maker_short()
+        let maker_cfd = Order::dummy_maker_short()
             .with_quantity(quantity)
             .with_opening_price(opening_price)
             .dummy_open(dummy_event_id())
             .with_lock(taker_keys, maker_keys);
 
-        let (cfd, ..) = Cfd::dummy_taker_long()
+        let (cfd, ..) = Order::dummy_taker_long()
             .with_quantity(quantity)
             .with_opening_price(opening_price)
             .dummy_open(dummy_event_id())
@@ -3020,13 +3018,13 @@ mod tests {
         let taker_keys = new_keypair();
         let maker_keys = new_keypair();
 
-        let maker_cfd = Cfd::dummy_maker_short()
+        let maker_cfd = Order::dummy_maker_short()
             .with_quantity(quantity)
             .with_opening_price(opening_price)
             .dummy_open(dummy_event_id())
             .with_lock(taker_keys, maker_keys);
 
-        let (cfd, ..) = Cfd::dummy_taker_long()
+        let (cfd, ..) = Order::dummy_taker_long()
             .with_quantity(quantity)
             .with_opening_price(opening_price)
             .dummy_open(dummy_event_id())
@@ -3046,7 +3044,7 @@ mod tests {
     /// settled.
     #[test]
     fn given_ongoing_collab_settlement_then_cannot_finish_rollover() {
-        let cfd = Cfd::dummy_taker_long()
+        let cfd = Order::dummy_taker_long()
             .dummy_open(dummy_event_id())
             .dummy_start_collab_settlement();
 
@@ -3057,7 +3055,7 @@ mod tests {
 
     #[test]
     fn given_ongoing_collab_settlement_then_cannot_start_rollover() {
-        let cfd = Cfd::dummy_taker_long()
+        let cfd = Order::dummy_taker_long()
             .dummy_open(dummy_event_id())
             .dummy_start_collab_settlement();
 
@@ -3069,7 +3067,7 @@ mod tests {
             CannotRollover::InCollaborativeSettlement
         );
 
-        let cfd = Cfd::dummy_maker_short()
+        let cfd = Order::dummy_maker_short()
             .dummy_open(dummy_event_id())
             .dummy_start_collab_settlement();
 
@@ -3091,7 +3089,7 @@ mod tests {
         let taker_keys = new_keypair();
         let maker_keys = new_keypair();
 
-        let taker_long = Cfd::dummy_taker_long()
+        let taker_long = Order::dummy_taker_long()
             .with_id(order_id)
             .with_quantity(quantity)
             .with_opening_price(opening_price)
@@ -3099,7 +3097,7 @@ mod tests {
             .dummy_start_rollover()
             .with_lock(taker_keys, maker_keys);
 
-        let maker_short = Cfd::dummy_maker_short()
+        let maker_short = Order::dummy_maker_short()
             .with_id(order_id)
             .with_quantity(quantity)
             .with_opening_price(opening_price)
@@ -3130,13 +3128,13 @@ mod tests {
         let taker_keys = new_keypair();
         let maker_keys = new_keypair();
 
-        let cfd = Cfd::dummy_taker_long()
+        let cfd = Order::dummy_taker_long()
             .with_quantity(quantity)
             .with_opening_price(opening_price)
             .dummy_open(dummy_event_id())
             .with_lock(taker_keys, maker_keys);
 
-        let maker_cfd = Cfd::dummy_maker_short()
+        let maker_cfd = Order::dummy_maker_short()
             .with_quantity(quantity)
             .with_opening_price(opening_price)
             .dummy_open(dummy_event_id())
@@ -3159,11 +3157,11 @@ mod tests {
 
     #[test]
     fn given_commit_when_lock_confirmed_then_lock_confirmed_after_finality() {
-        let taker_long = Cfd::dummy_taker_long()
+        let taker_long = Order::dummy_taker_long()
             .dummy_open(dummy_event_id())
             .dummy_commit();
 
-        let maker_short = Cfd::dummy_maker_short()
+        let maker_short = Order::dummy_maker_short()
             .dummy_open(dummy_event_id())
             .dummy_commit();
 
@@ -3176,11 +3174,11 @@ mod tests {
 
     #[test]
     fn given_ongoing_collab_settlement_when_lock_confirmed_then_lock_confirmed() {
-        let taker_long = Cfd::dummy_taker_long()
+        let taker_long = Order::dummy_taker_long()
             .dummy_open(dummy_event_id())
             .dummy_start_collab_settlement();
 
-        let maker_short = Cfd::dummy_maker_short()
+        let maker_short = Order::dummy_maker_short()
             .dummy_open(dummy_event_id())
             .dummy_start_collab_settlement();
 
@@ -3200,14 +3198,14 @@ mod tests {
         let taker_keys = new_keypair();
         let maker_keys = new_keypair();
 
-        let taker_long = Cfd::dummy_taker_long()
+        let taker_long = Order::dummy_taker_long()
             .with_id(order_id)
             .with_quantity(quantity)
             .with_opening_price(opening_price)
             .dummy_open(dummy_event_id())
             .with_lock(taker_keys, maker_keys);
 
-        let maker_short = Cfd::dummy_maker_short()
+        let maker_short = Order::dummy_maker_short()
             .with_id(order_id)
             .with_quantity(quantity)
             .with_opening_price(opening_price)
@@ -3230,7 +3228,7 @@ mod tests {
         let taker_keys = new_keypair();
         let maker_keys = new_keypair();
 
-        let taker_long = Cfd::dummy_taker_long()
+        let taker_long = Order::dummy_taker_long()
             .dummy_open(dummy_event_id())
             .with_lock(taker_keys, maker_keys);
 
@@ -3248,7 +3246,7 @@ mod tests {
 
         let taker_long = taker_long.dummy_commit();
 
-        let maker_short = Cfd::dummy_maker_short()
+        let maker_short = Order::dummy_maker_short()
             .dummy_open(dummy_event_id())
             .with_lock(taker_keys, maker_keys)
             .dummy_commit();
@@ -3461,8 +3459,8 @@ mod tests {
             let from_event_id = BitMexPriceEventId::with_20_digits(now + 12.hours());
             let to_event_id = BitMexPriceEventId::with_20_digits(now + 19.hours());
 
-            let taker = Cfd::dummy_taker_long().dummy_open(from_event_id);
-            let maker = Cfd::dummy_maker_short().dummy_open(from_event_id);
+            let taker = Order::dummy_taker_long().dummy_open(from_event_id);
+            let maker = Order::dummy_maker_short().dummy_open(from_event_id);
 
             assert_eq!(
                 taker
@@ -3495,8 +3493,8 @@ mod tests {
             for hour in 0..settlement_interval {
                 let from_event_id = BitMexPriceEventId::with_20_digits(now + hour.hours());
 
-                let taker = Cfd::dummy_taker_long().dummy_open(from_event_id);
-                let maker = Cfd::dummy_maker_short().dummy_open(from_event_id);
+                let taker = Order::dummy_taker_long().dummy_open(from_event_id);
+                let maker = Order::dummy_maker_short().dummy_open(from_event_id);
 
                 assert_eq!(
                     taker
@@ -3525,8 +3523,8 @@ mod tests {
         for now in common_time_boundaries() {
             let event_id_1_hour_ago = BitMexPriceEventId::with_20_digits(now - 1.hours());
 
-            let taker = Cfd::dummy_taker_long().dummy_open(event_id_1_hour_ago);
-            let maker = Cfd::dummy_maker_short().dummy_open(event_id_1_hour_ago);
+            let taker = Order::dummy_taker_long().dummy_open(event_id_1_hour_ago);
+            let maker = Order::dummy_maker_short().dummy_open(event_id_1_hour_ago);
 
             let event_id_in_24_hours = BitMexPriceEventId::with_20_digits(now - 24.hours());
 
@@ -3565,8 +3563,8 @@ mod tests {
             let from_event_id = BitMexPriceEventId::with_20_digits(now + 2.hours());
             let earlier_event_id = BitMexPriceEventId::with_20_digits(now + 1.hours());
 
-            let taker = Cfd::dummy_taker_long().dummy_open(from_event_id);
-            let maker = Cfd::dummy_maker_short().dummy_open(from_event_id);
+            let taker = Order::dummy_taker_long().dummy_open(from_event_id);
+            let maker = Order::dummy_maker_short().dummy_open(from_event_id);
 
             taker
                 .hours_to_extend_in_rollover_based_on_event(earlier_event_id, now, from_event_id)
@@ -3584,8 +3582,8 @@ mod tests {
             for hour in 0..settlement_interval {
                 let event_id_in_x_hours = BitMexPriceEventId::with_20_digits(now + hour.hours());
 
-                let taker = Cfd::dummy_taker_long().dummy_open(event_id_in_x_hours);
-                let maker = Cfd::dummy_maker_short().dummy_open(event_id_in_x_hours);
+                let taker = Order::dummy_taker_long().dummy_open(event_id_in_x_hours);
+                let maker = Order::dummy_maker_short().dummy_open(event_id_in_x_hours);
 
                 assert_eq!(
                     taker.hours_to_extend_in_rollover(now).unwrap(),
@@ -3609,8 +3607,8 @@ mod tests {
         for now in common_time_boundaries() {
             let event_id_1_hour_ago = BitMexPriceEventId::with_20_digits(now - 1.hours());
 
-            let taker = Cfd::dummy_taker_long().dummy_open(event_id_1_hour_ago);
-            let maker = Cfd::dummy_maker_short().dummy_open(event_id_1_hour_ago);
+            let taker = Order::dummy_taker_long().dummy_open(event_id_1_hour_ago);
+            let maker = Order::dummy_maker_short().dummy_open(event_id_1_hour_ago);
 
             assert_eq!(
                 taker.hours_to_extend_in_rollover(now).unwrap(),
@@ -3636,8 +3634,8 @@ mod tests {
                 now + more_than_settlement_interval_hours.hours(),
             );
 
-            let taker = Cfd::dummy_taker_long().dummy_open(event_id_way_in_the_future);
-            let maker = Cfd::dummy_maker_short().dummy_open(event_id_way_in_the_future);
+            let taker = Order::dummy_taker_long().dummy_open(event_id_way_in_the_future);
+            let maker = Order::dummy_maker_short().dummy_open(event_id_way_in_the_future);
 
             taker.hours_to_extend_in_rollover(now).unwrap_err();
             maker.hours_to_extend_in_rollover(now).unwrap_err();
@@ -3653,8 +3651,8 @@ mod tests {
                     now + close_to_settlement_interval,
                 );
 
-                let taker = Cfd::dummy_taker_long().dummy_open(event_id_within_the_hour);
-                let maker = Cfd::dummy_maker_short().dummy_open(event_id_within_the_hour);
+                let taker = Order::dummy_taker_long().dummy_open(event_id_within_the_hour);
+                let maker = Order::dummy_maker_short().dummy_open(event_id_within_the_hour);
 
                 prop_assert_eq!(taker.hours_to_extend_in_rollover(now).unwrap(), 1, "Failed with now {}", now);
                 prop_assert_eq!(maker.hours_to_extend_in_rollover(now).unwrap(), 1, "Failed with now {}", now);
@@ -3864,7 +3862,6 @@ mod tests {
     }
 
     impl CfdEvent {
-        // TODO(restioson): need to change this whole dummy_open concept
         fn dummy_open(event_id: BitMexPriceEventId) -> Vec<Self> {
             vec![
                 CfdEvent {
@@ -3969,13 +3966,22 @@ mod tests {
         }
     }
 
-    impl Cfd {
-        pub fn dummy_open(self, event_id: BitMexPriceEventId) -> Self {
-            CfdEvent::dummy_open(event_id)
+    impl Order {
+        // TODO(restioson): separate dlc loading
+        // maybe just do this manually when CFDs do not get ContractSetupCompleted applied redundantly
+        pub fn dummy_open(self, event_id: BitMexPriceEventId) -> Cfd {
+            let events = CfdEvent::dummy_open(event_id);
+            let dlc = match &events[1].event {
+                EventKind::ContractSetupCompleted { dlc } => dlc.clone().unwrap(),
+                _ => unreachable!(),
+            };
+            events
                 .into_iter()
-                .fold(self, Cfd::apply)
+                .fold(Cfd::new(self, dlc), Cfd::apply)
         }
+    }
 
+    impl Cfd {
         /// Constructs a lock transaction from test wallet
         ///
         /// The transaction crated is not just a dummy, but is an actual lock transaction created
@@ -3991,26 +3997,26 @@ mod tests {
 
             match self.role() {
                 Role::Taker => {
-                    let taker_margin = self.margin();
-                    let maker_margin = self.counterparty_margin();
+                    let taker_margin = self.order.margin();
+                    let maker_margin = self.order.counterparty_margin();
 
-                    self.dlc = Some(self.dlc.unwrap().with_lock_taker(
+                    self.dlc = self.dlc.with_lock_taker(
                         taker_margin,
                         maker_margin,
                         sk_taker,
                         pk_maker,
-                    ));
+                    );
                 }
                 Role::Maker => {
-                    let taker_margin = self.counterparty_margin();
-                    let maker_margin = self.margin();
+                    let taker_margin = self.order.counterparty_margin();
+                    let maker_margin = self.order.margin();
 
-                    self.dlc = Some(self.dlc.unwrap().with_lock_maker(
+                    self.dlc = self.dlc.with_lock_maker(
                         taker_margin,
                         maker_margin,
                         sk_maker,
                         pk_taker,
-                    ));
+                    );
                 }
             };
 
@@ -4035,7 +4041,7 @@ mod tests {
         }
 
         fn dummy_start_collab_settlement(self) -> Self {
-            CfdEvent::dummy_start_collab_settlement(self.id)
+            CfdEvent::dummy_start_collab_settlement(self.id())
                 .into_iter()
                 .fold(self, Cfd::apply)
         }
@@ -4133,7 +4139,7 @@ mod tests {
         }
 
         fn dummy_with_attestation(event_id: BitMexPriceEventId) -> Self {
-            let cfd = Cfd::from_order(
+            let order = Order::from_taken_offer(
                 OrderId::default(),
                 &Offer::dummy_short(),
                 Usd::new(dec!(1000)),
@@ -4145,11 +4151,11 @@ mod tests {
 
             CfdEvent::dummy_attestation_prior_timelock(event_id)
                 .into_iter()
-                .fold(cfd, Cfd::apply)
+                .fold(Cfd::new(order, Dlc::dummy(Some(event_id))), Cfd::apply)
         }
 
         fn dummy_final(event_id: BitMexPriceEventId) -> Self {
-            let cfd = Cfd::from_order(
+            let order = Order::from_taken_offer(
                 OrderId::default(),
                 &Offer::dummy_short(),
                 Usd::new(dec!(1000)),
@@ -4161,7 +4167,7 @@ mod tests {
 
             CfdEvent::dummy_final_cet(event_id)
                 .into_iter()
-                .fold(cfd, Cfd::apply)
+                .fold(Cfd::new(order, Dlc::dummy(Some(event_id))), Cfd::apply)
         }
 
         fn collab_settlement_payout(self, script: Script) -> Amount {
@@ -4171,7 +4177,7 @@ mod tests {
     }
 
     impl Offer {
-        fn dummy_short() -> Self {
+        pub fn dummy_short() -> Self {
             Offer::new(
                 Position::Short,
                 Price::new(dec!(1000)).unwrap(),
