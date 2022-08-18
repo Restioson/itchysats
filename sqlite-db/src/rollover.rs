@@ -38,10 +38,10 @@ mod tests {
     use time::Duration;
     use time::OffsetDateTime;
 
-    pub fn dummy_cfd(dlc: Dlc) -> Cfd {
+    pub fn dummy_cfd(order_id: OrderId, dlc: Dlc) -> Cfd {
         Cfd::new(
             Order::new(
-                OrderId::default(),
+                order_id,
                 OfferId::default(),
                 Position::Long,
                 Price::new(dec!(60_000)).unwrap(),
@@ -77,7 +77,7 @@ mod tests {
         };
 
         let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event);
-        let cfd = dummy_cfd(dlc.clone());
+        let cfd = dummy_cfd(rollover_completed.id, dlc.clone());
 
         db.insert_cfd(&cfd).await.unwrap();
         db.append_event(rollover_completed.clone()).await.unwrap();
@@ -117,7 +117,7 @@ mod tests {
 
         let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
 
-        let cfd = dummy_cfd(dlc.clone());
+        let cfd = dummy_cfd(rollover_completed.id, dlc.clone());
         db.insert_cfd(&cfd).await?;
 
         // insert first rollovercompleted event
@@ -166,7 +166,6 @@ mod tests {
         let db = memory().await?;
         let mut conn = db.inner.acquire().await?;
 
-
         let timestamp = Timestamp::now();
 
         let event = std::fs::read_to_string("./src/test_events/rollover_completed.json")?;
@@ -180,9 +179,9 @@ mod tests {
 
         let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
 
-        let cfd = dummy_cfd(dlc.clone());
-        db.insert_cfd(&cfd).await?;
-        db.append_event(rollover_completed.clone()).await?;
+        let cfd = dummy_cfd(rollover_completed.id, dlc.clone());
+        db.insert_cfd(&cfd).await.context("inserting cfd failed")?;
+        db.append_event(rollover_completed.clone()).await.context("appending rollovercompleted failed")?;
 
         overwrite(
             &mut *conn,
@@ -192,7 +191,8 @@ mod tests {
             funding_fee,
             complete_fee,
         )
-        .await?;
+        .await
+        .context("overwrite failed")?;
 
         let order_id = models::OrderId::from(cfd.id());
 
@@ -231,7 +231,7 @@ mod tests {
 
         let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
 
-        let cfd = dummy_cfd(dlc.clone());
+        let cfd = dummy_cfd(rollover_completed.id, dlc.clone());
         db.insert_cfd(&cfd).await?;
 
         // insert first RolloverCompleted event data

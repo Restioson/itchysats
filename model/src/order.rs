@@ -274,7 +274,6 @@ mod test {
     use crate::olivia::BitMexPriceEventId;
     use crate::Origin;
 
-    // TODO(restioson): this is just copied
     pub fn dummy_identity() -> Identity {
         Identity::new(x25519_dalek::PublicKey::from(
             *b"hello world, oh what a beautiful",

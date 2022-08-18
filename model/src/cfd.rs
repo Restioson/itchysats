@@ -1369,7 +1369,6 @@ impl Cfd {
         CfdEvent::new(self.id(), event)
     }
 
-    // TODO(restioson): why?
     pub fn id(&self) -> OrderId {
         self.order.id()
     }
