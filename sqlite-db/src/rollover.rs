@@ -14,7 +14,7 @@ mod tests {
     use anyhow::Result;
     use bdk::bitcoin::Amount;
     use model::olivia::BitMexPriceEventId;
-    use model::Cfd;
+    use model::{Cfd, Order};
     use model::CfdEvent;
     use model::CompleteFee;
     use model::ContractSymbol;
@@ -38,24 +38,27 @@ mod tests {
     use time::Duration;
     use time::OffsetDateTime;
 
-    pub fn dummy_cfd() -> Cfd {
+    pub fn dummy_cfd(dlc: Dlc) -> Cfd {
         Cfd::new(
-            OrderId::default(),
-            OfferId::default(),
-            Position::Long,
-            Price::new(dec!(60_000)).unwrap(),
-            Leverage::TWO,
-            Duration::hours(24),
-            Role::Taker,
-            Usd::new(dec!(1_000)),
-            "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
-                .parse()
-                .unwrap(),
-            None,
-            OpeningFee::new(Amount::from_sat(2000)),
-            FundingRate::default(),
-            TxFeeRate::default(),
-            ContractSymbol::BtcUsd,
+            Order::new(
+                OrderId::default(),
+                OfferId::default(),
+                Position::Long,
+                Price::new(dec!(60_000)).unwrap(),
+                Leverage::TWO,
+                Duration::hours(24),
+                Role::Taker,
+                Usd::new(dec!(1_000)),
+                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                    .parse()
+                    .unwrap(),
+                None,
+                OpeningFee::new(Amount::from_sat(2000)),
+                FundingRate::default(),
+                TxFeeRate::default(),
+                ContractSymbol::BtcUsd,
+            ),
+            dlc
         )
     }
 
@@ -64,20 +67,21 @@ mod tests {
         let db = memory().await.unwrap();
         let mut conn = db.inner.acquire().await.unwrap();
 
-        let cfd = dummy_cfd();
-        db.insert_cfd(&cfd).await.unwrap();
         let timestamp = Timestamp::now();
         let event = std::fs::read_to_string("./src/test_events/rollover_completed.json").unwrap();
         let event = serde_json::from_str::<EventKind>(&event).unwrap();
         let rollover_completed = CfdEvent {
             timestamp,
-            id: cfd.id(),
+            id: OrderId::default(),
             event: event.clone(),
         };
 
+        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event);
+        let cfd = dummy_cfd(dlc.clone());
+
+        db.insert_cfd(&cfd).await.unwrap();
         db.append_event(rollover_completed.clone()).await.unwrap();
 
-        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event);
         overwrite(
             &mut *conn,
             1,
@@ -100,9 +104,6 @@ mod tests {
         let db = memory().await?;
         let mut conn = db.inner.acquire().await?;
 
-        let cfd = dummy_cfd();
-        db.insert_cfd(&cfd).await?;
-
         let timestamp = Timestamp::now();
 
         let event = std::fs::read_to_string("./src/test_events/rollover_completed.json")?;
@@ -110,14 +111,18 @@ mod tests {
 
         let rollover_completed = CfdEvent {
             timestamp,
-            id: cfd.id(),
+            id: OrderId::default(),
             event: event.clone(),
         };
+
+        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
+
+        let cfd = dummy_cfd(dlc.clone());
+        db.insert_cfd(&cfd).await?;
 
         // insert first rollovercompleted event
         db.append_event(rollover_completed.clone()).await?;
 
-        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
         overwrite(
             &mut *conn,
             1,
@@ -161,8 +166,6 @@ mod tests {
         let db = memory().await?;
         let mut conn = db.inner.acquire().await?;
 
-        let cfd = dummy_cfd();
-        db.insert_cfd(&cfd).await?;
 
         let timestamp = Timestamp::now();
 
@@ -171,13 +174,16 @@ mod tests {
 
         let rollover_completed = CfdEvent {
             timestamp,
-            id: cfd.id(),
+            id: OrderId::default(),
             event: event.clone(),
         };
 
+        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
+
+        let cfd = dummy_cfd(dlc.clone());
+        db.insert_cfd(&cfd).await?;
         db.append_event(rollover_completed.clone()).await?;
 
-        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
         overwrite(
             &mut *conn,
             1,
@@ -196,7 +202,7 @@ mod tests {
             .id
             .unwrap();
 
-        let (loaded_dlc, loaded_funding_fee, loaded_complete_fee) = load(&mut *conn, cfd_row_id, 1)
+        let (loaded_dlc, loaded_funding_fee, loaded_complete_fee) = load(&mut *conn, cfd_row_id)
             .await?
             .context("Expect to find data")?;
 
@@ -214,21 +220,23 @@ mod tests {
         let db = memory().await?;
         let mut conn = db.inner.acquire().await?;
 
-        let cfd = dummy_cfd();
-        db.insert_cfd(&cfd).await?;
         let timestamp = Timestamp::now();
         let event = std::fs::read_to_string("./src/test_events/rollover_completed.json")?;
         let event = serde_json::from_str::<EventKind>(&event)?;
         let rollover_completed = CfdEvent {
             timestamp,
-            id: cfd.id(),
+            id: OrderId::default(),
             event: event.clone(),
         };
+
+        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
+
+        let cfd = dummy_cfd(dlc.clone());
+        db.insert_cfd(&cfd).await?;
 
         // insert first RolloverCompleted event data
         db.append_event(rollover_completed.clone()).await?;
 
-        let (dlc, funding_fee, complete_fee) = extract_rollover_completed_data(event.clone());
         overwrite(
             &mut *conn,
             1,
@@ -270,7 +278,7 @@ mod tests {
             .id
             .unwrap();
 
-        let (loaded_dlc, loaded_funding_fee, loaded_complete_fee) = load(&mut *conn, cfd_row_id, 2)
+        let (loaded_dlc, loaded_funding_fee, loaded_complete_fee) = load(&mut *conn, cfd_row_id)
             .await?
             .context("Expect to find data")?;
 

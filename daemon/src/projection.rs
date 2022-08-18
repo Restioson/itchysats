@@ -1694,8 +1694,8 @@ mod tests {
         assert_eq!(json, "\"SetupFailed\"");
     }
 
-    pub fn dummy_cfd() -> model::Cfd {
-        model::Cfd::new(
+    pub fn dummy_order() -> model::Order {
+        model::Order::new(
             OrderId::default(),
             OfferId::default(),
             Position::Long,
@@ -1715,7 +1715,7 @@ mod tests {
         )
     }
 
-    pub fn setup_failed(cfd: &model::Cfd) -> CfdEvent {
+    pub fn setup_failed(cfd: &model::Order) -> CfdEvent {
         CfdEvent {
             timestamp: Timestamp::now(),
             id: cfd.id(),
@@ -1723,7 +1723,7 @@ mod tests {
         }
     }
 
-    pub fn order_rejected(cfd: &model::Cfd) -> CfdEvent {
+    pub fn order_rejected(cfd: &model::Order) -> CfdEvent {
         CfdEvent {
             timestamp: Timestamp::now(),
             id: cfd.id(),
@@ -1736,7 +1736,7 @@ mod tests {
         // 69a42aa90da8b065b9532b62bff940a3ba07dbbb11d4482c7db83a7e049a9f1e|Taker|0|0|1
         let order_id = OrderId::default();
         let offer_id = OfferId::default();
-        let cfd = model::Cfd::new(
+        let order = model::Order::new(
             order_id,
             offer_id,
             Position::Long,
@@ -1760,6 +1760,10 @@ mod tests {
                 .unwrap();
         let contract_setup_completed =
             serde_json::from_str::<EventKind>(&contract_setup_completed).unwrap();
+        let dlc = match &contract_setup_completed {
+            EventKind::ContractSetupCompleted { dlc } => dlc.clone().unwrap(),
+            _ => unreachable!("Expected contract setup completed event"),
+        };
         let contract_setup_completed = CfdEvent {
             timestamp: Timestamp::now(),
             id: order_id,
@@ -1777,6 +1781,8 @@ mod tests {
             id: order_id,
             event: collaborative_settlement_completed,
         };
+
+        let cfd = model::Cfd::new(order, dlc);
 
         (
             cfd,
@@ -1798,10 +1804,10 @@ mod tests {
     ) {
         let db = memory().await.unwrap();
 
-        let cfd = dummy_cfd();
+        let cfd = dummy_order();
         let order_id = cfd.id();
 
-        db.insert_cfd(&cfd).await.unwrap();
+        db.insert_order(&cfd).await.unwrap();
 
         db.append_event(setup_failed(&cfd)).await.unwrap();
 
@@ -1834,10 +1840,10 @@ mod tests {
     ) {
         let db = memory().await.unwrap();
 
-        let cfd = dummy_cfd();
+        let cfd = dummy_order();
         let order_id = cfd.id();
 
-        db.insert_cfd(&cfd).await.unwrap();
+        db.insert_order(&cfd).await.unwrap();
 
         db.append_event(order_rejected(&cfd)).await.unwrap();
 

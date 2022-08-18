@@ -486,6 +486,24 @@
       "nullable": []
     }
   },
+  "56e8ce89f0072ac7c451c2a6314f4c22664ccd48e345255ca61319a8040f7626": {
+    "query": "select id from cfds where order_id = $1",
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int64"
+        }
+      ],
+      "parameters": {
+        "Right": 1
+      },
+      "nullable": [
+        true
+      ]
+    }
+  },
   "76e71ec93cb68fc2a917844dd8ea20d307326f215d0a4b0356393b0d2f5067bc": {
     "query": "\n        SELECT\n            closed_commit_txs.txid as \"commit_txid!: models::Txid\",\n            closed_refund_txs.txid as \"txid: models::Txid\",\n            closed_refund_txs.vout as \"vout: models::Vout\",\n            closed_refund_txs.payout as \"payout: models::Payout\"\n        FROM\n            closed_refund_txs\n        JOIN\n            closed_commit_txs on closed_commit_txs.cfd_id = closed_refund_txs.cfd_id\n        JOIN\n            closed_cfds on closed_cfds.id = closed_refund_txs.cfd_id\n        WHERE\n            closed_cfds.order_id = $1\n        ",
     "describe": {
@@ -826,6 +844,36 @@
         "Right": 1
       },
       "nullable": []
+    }
+  },
+  "9df788a4d4fdbb7dd146af6e13a7aa36e7c5b13e57b972a9148370bbe3118587": {
+    "query": "\n            SELECT\n                COUNT(DISTINCT rollover_completed_event_data.id) as rollovers,\n                COUNT(DISTINCT revoked_commit_transactions.id) as revokes,\n                COUNT(DISTINCT open_cets.id) as cets\n            FROM\n                rollover_completed_event_data,\n                revoked_commit_transactions,\n                open_cets;\n            ",
+    "describe": {
+      "columns": [
+        {
+          "name": "rollovers",
+          "ordinal": 0,
+          "type_info": "Int"
+        },
+        {
+          "name": "revokes",
+          "ordinal": 1,
+          "type_info": "Int"
+        },
+        {
+          "name": "cets",
+          "ordinal": 2,
+          "type_info": "Int"
+        }
+      ],
+      "parameters": {
+        "Right": 0
+      },
+      "nullable": [
+        false,
+        null,
+        null
+      ]
     }
   },
   "9ee7e0229619689eed2c5f2e834d9449a732824bbeffed628d01abc1d1839319": {

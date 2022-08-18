@@ -979,7 +979,7 @@ mod tests {
     use crate::memory;
     use bdk::bitcoin::SignedAmount;
     use model::libp2p::PeerId;
-    use model::Cfd;
+    use model::{Cfd, Order};
     use model::ContractSymbol;
     use model::EventKind;
     use model::FundingRate;
@@ -1284,7 +1284,7 @@ mod tests {
         // 69a42aa90da8b065b9532b62bff940a3ba07dbbb11d4482c7db83a7e049a9f1e|Taker|0|0|1
         let order_id = OrderId::default();
         let offer_id = OfferId::default();
-        let cfd = Cfd::new(
+        let order = Order::new(
             order_id,
             offer_id,
             Position::Long,
@@ -1323,6 +1323,12 @@ mod tests {
             id: order_id,
             event: collaborative_settlement_completed,
         };
+
+        let dlc = match &contract_setup_completed.event {
+            EventKind::ContractSetupCompleted { dlc } => dlc.clone().unwrap(),
+            _ => unreachable!("Expected contract setup completed event"),
+        };
+        let cfd = Cfd::new(order, dlc);
 
         (
             cfd,

@@ -266,3 +266,101 @@ impl Order {
         self.opening_fee
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use rust_decimal_macros::dec;
+    use crate::olivia::BitMexPriceEventId;
+    use crate::Origin;
+
+    // TODO(restioson): this is just copied
+    pub fn dummy_identity() -> Identity {
+        Identity::new(x25519_dalek::PublicKey::from(
+            *b"hello world, oh what a beautiful",
+        ))
+    }
+
+    pub fn dummy_peer_id() -> Option<PeerId> {
+        Some(PeerId::random())
+    }
+
+    impl Order {
+        pub fn taker_long_from_order(mut offer: Offer, quantity: Usd, leverage: Leverage) -> Self {
+            offer.origin = Origin::Theirs;
+
+            Order::from_taken_offer(
+                OrderId::default(),
+                &offer,
+                quantity,
+                dummy_identity(),
+                dummy_peer_id(),
+                Role::Taker,
+                leverage,
+            )
+        }
+
+        pub fn maker_short_from_order(offer: Offer, quantity: Usd, leverage: Leverage) -> Self {
+            Order::from_taken_offer(
+                OrderId::default(),
+                &offer,
+                quantity,
+                dummy_identity(),
+                dummy_peer_id(),
+                Role::Maker,
+                leverage,
+            )
+        }
+
+        pub fn dummy_taker_long() -> Self {
+            Order::from_taken_offer(
+                OrderId::default(),
+                &Offer::dummy_short(),
+                Usd::new(dec!(1000)),
+                dummy_identity(),
+                dummy_peer_id(),
+                Role::Taker,
+                Leverage::TWO,
+            )
+        }
+
+        pub fn dummy_maker_short() -> Self {
+            Order::from_taken_offer(
+                OrderId::default(),
+                &Offer::dummy_short(),
+                Usd::new(dec!(1000)),
+                dummy_identity(),
+                dummy_peer_id(),
+                Role::Maker,
+                Leverage::TWO,
+            )
+        }
+
+        pub fn dummy_not_open_yet() -> Self {
+            Order::from_taken_offer(
+                OrderId::default(),
+                &Offer::dummy_short(),
+                Usd::new(dec!(1000)),
+                dummy_identity(),
+                dummy_peer_id(),
+                Role::Taker,
+                Leverage::TWO,
+            )
+        }
+
+        pub fn with_id(mut self, order_id: OrderId) -> Self {
+            self.id = order_id;
+            self
+        }
+
+        pub fn with_quantity(mut self, quantity: Usd) -> Self {
+            self.quantity = quantity;
+            self
+        }
+
+        pub fn with_opening_price(mut self, price: Price) -> Self {
+            self.initial_price = price;
+            self
+        }
+    }
+}

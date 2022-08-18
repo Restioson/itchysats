@@ -804,7 +804,7 @@ async fn delete_from_events_table(conn: &mut SqliteConnection, id: OrderId) -> R
 mod tests {
     use super::*;
     use bdk::bitcoin::Amount;
-    use model::Cfd;
+    use model::{Cfd, ContractSymbol, OfferId};
     use model::Leverage;
     use model::OpeningFee;
     use model::Position;
@@ -813,51 +813,37 @@ mod tests {
     use model::Timestamp;
     use model::TxFeeRate;
     use model::Usd;
+    use model::FundingRate;
     use pretty_assertions::assert_eq;
     use rust_decimal_macros::dec;
 
     #[tokio::test]
-    async fn test_insert_and_load_cfd() {
+    async fn test_insert_and_load_order() {
         let db = memory().await.unwrap();
         let mut conn = db.inner.acquire().await.unwrap();
 
-        let cfd = dummy_cfd();
-        db.insert_cfd(&cfd).await.unwrap();
+        let order = dummy_order();
+        db.insert_order(&order).await.unwrap();
 
-        let super::Cfd {
-            id,
-            offer_id,
-            position,
-            initial_price,
-            taker_leverage: leverage,
-            settlement_interval,
-            quantity_usd,
-            counterparty_network_identity,
-            counterparty_peer_id,
-            role,
-            opening_fee,
-            initial_funding_rate,
-            initial_tx_fee_rate,
-            contract_symbol,
-        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
+        let (loaded, _) = load_order_and_row_id(&mut *conn, order.id()).await.unwrap();
 
-        assert_eq!(cfd.id(), id);
-        assert_eq!(cfd.offer_id(), offer_id);
-        assert_eq!(cfd.position(), position);
-        assert_eq!(cfd.initial_price(), initial_price);
-        assert_eq!(cfd.taker_leverage(), leverage);
-        assert_eq!(cfd.settlement_time_interval_hours(), settlement_interval);
-        assert_eq!(cfd.quantity(), quantity_usd);
+        assert_eq!(order.id(), loaded.id());
+        assert_eq!(order.offer_id(), loaded.offer_id());
+        assert_eq!(order.position(), loaded.position());
+        assert_eq!(order.initial_price(), loaded.initial_price());
+        assert_eq!(order.taker_leverage(), loaded.taker_leverage());
+        assert_eq!(order.settlement_time_interval_hours(), loaded.settlement_time_interval_hours());
+        assert_eq!(order.quantity(), loaded.quantity());
         assert_eq!(
-            cfd.counterparty_network_identity(),
-            counterparty_network_identity
+            order.counterparty_network_identity(),
+            loaded.counterparty_network_identity()
         );
-        assert_eq!(cfd.counterparty_peer_id(), counterparty_peer_id);
-        assert_eq!(cfd.role(), role);
-        assert_eq!(cfd.opening_fee(), opening_fee);
-        assert_eq!(cfd.initial_funding_rate(), initial_funding_rate);
-        assert_eq!(cfd.initial_tx_fee_rate(), initial_tx_fee_rate);
-        assert_eq!(cfd.contract_symbol(), contract_symbol);
+        assert_eq!(order.counterparty_peer_id(), loaded.counterparty_peer_id());
+        assert_eq!(order.role(), loaded.role());
+        assert_eq!(order.opening_fee(), loaded.opening_fee());
+        assert_eq!(order.initial_funding_rate(), loaded.initial_funding_rate());
+        assert_eq!(order.initial_tx_fee_rate(), loaded.initial_tx_fee_rate());
+        assert_eq!(order.contract_symbol(), loaded.contract_symbol());
     }
 
     #[tokio::test]
@@ -865,116 +851,104 @@ mod tests {
         let db = memory().await.unwrap();
         let mut conn = db.inner.acquire().await.unwrap();
 
-        let cfd = dummy_cfd();
-        db.insert_cfd(&cfd).await.unwrap();
+        let order = dummy_order();
+        db.insert_order(&order).await.unwrap();
 
         let timestamp = Timestamp::now();
 
         let event1 = CfdEvent {
             timestamp,
-            id: cfd.id(),
+            id: order.id(),
             event: EventKind::OfferRejected,
         };
 
         db.append_event(event1.clone()).await.unwrap();
 
-        let events = load_cfd_events(&mut *conn, cfd.id(), 0).await.unwrap();
+        let events = load_cfd_events(&mut *conn, order.id(), 0).await.unwrap();
         assert_eq!(events, vec![event1.clone()]);
 
         let event2 = CfdEvent {
             timestamp,
-            id: cfd.id(),
+            id: order.id(),
             event: EventKind::RevokeConfirmed,
         };
 
         db.append_event(event2.clone()).await.unwrap();
 
-        let events = load_cfd_events(&mut *conn, cfd.id(), 0).await.unwrap();
+        let events = load_cfd_events(&mut *conn, order.id(), 0).await.unwrap();
         assert_eq!(events, vec![event1, event2])
     }
 
     #[tokio::test]
-    async fn given_insert_cfd_with_peer_id_then_peer_id_loaded() {
+    async fn given_insert_order_with_peer_id_then_peer_id_loaded() {
         let db = memory().await.unwrap();
         let mut conn = db.inner.acquire().await.unwrap();
 
-        let cfd = dummy_taker_with_counterparty_peer_id();
-        db.insert_cfd(&cfd).await.unwrap();
+        let order = dummy_taker_with_counterparty_peer_id();
+        db.insert_order(&order).await.unwrap();
 
-        let super::Cfd {
-            counterparty_peer_id,
-            ..
-        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
+        let (loaded, _) = load_order_and_row_id(&mut *conn, order.id()).await.unwrap();
 
-        assert_eq!(cfd.counterparty_peer_id(), counterparty_peer_id);
+        assert_eq!(order.counterparty_peer_id(), loaded.counterparty_peer_id());
     }
 
     #[tokio::test]
-    async fn given_insert_cfd_without_peer_id_when_known_mainnet_maker_then_peer_id_loaded() {
+    async fn given_insert_order_without_peer_id_when_known_mainnet_maker_then_peer_id_loaded() {
         let db = memory().await.unwrap();
         let mut conn = db.inner.acquire().await.unwrap();
 
-        let cfd = dummy_taker_with_legacy_identity(
+        let order = dummy_taker_with_legacy_identity(
             "7e35e34801e766a6a29ecb9e22810ea4e3476c2b37bf75882edf94a68b1d9607",
         );
-        db.insert_cfd(&cfd).await.unwrap();
+        db.insert_order(&order).await.unwrap();
 
-        let super::Cfd {
-            counterparty_peer_id,
-            ..
-        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
+        let (loaded, _) = load_order_and_row_id(&mut *conn, order.id()).await.unwrap();
 
         assert_eq!(
             "12D3KooWP3BN6bq9jPy8cP7Grj1QyUBfr7U6BeQFgMwfTTu12wuY",
-            counterparty_peer_id.unwrap().inner().to_string().as_str()
+            loaded.counterparty_peer_id().unwrap().inner().to_string().as_str()
         );
     }
 
     #[tokio::test]
-    async fn given_insert_cfd_without_peer_id_when_known_testnet_maker_then_peer_id_loaded() {
+    async fn given_insert_order_without_peer_id_when_known_testnet_maker_then_peer_id_loaded() {
         let db = memory().await.unwrap();
         let mut conn = db.inner.acquire().await.unwrap();
 
-        let cfd = dummy_taker_with_legacy_identity(
+        let order = dummy_taker_with_legacy_identity(
             "69a42aa90da8b065b9532b62bff940a3ba07dbbb11d4482c7db83a7e049a9f1e",
         );
-        db.insert_cfd(&cfd).await.unwrap();
+        db.insert_order(&order).await.unwrap();
 
-        let super::Cfd {
-            counterparty_peer_id,
-            ..
-        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
+        let (loaded, _) = load_order_and_row_id(&mut *conn, order.id()).await.unwrap();
 
         assert_eq!(
             "12D3KooWEsK2X8Tp24XtyWh7DM65VfwXtNH2cmfs2JsWmkmwKbV1",
-            counterparty_peer_id.unwrap().inner().to_string().as_str()
+            loaded.counterparty_peer_id().unwrap().inner().to_string().as_str()
         );
     }
 
     #[tokio::test]
-    async fn given_insert_cfd_without_peer_id_when_unknown_maker_then_no_peer_id_loaded() {
+    async fn given_insert_order_without_peer_id_when_unknown_maker_then_no_peer_id_loaded() {
         let db = memory().await.unwrap();
         let mut conn = db.inner.acquire().await.unwrap();
 
-        let cfd = dummy_cfd();
-        db.insert_cfd(&cfd).await.unwrap();
+        let order = dummy_order();
+        db.insert_order(&order).await.unwrap();
 
-        let super::Cfd {
-            counterparty_peer_id,
-            ..
-        } = load_cfd_row_and_dlc(&mut *conn, cfd.id()).await.unwrap();
+        let (loaded, _) = load_order_and_row_id(&mut *conn, order.id()).await.unwrap();
 
-        assert_eq!(None, counterparty_peer_id);
+        assert_eq!(None, loaded.counterparty_peer_id());
     }
 
-    pub fn dummy_cfd() -> Cfd {
+    pub fn dummy_order() -> Order {
         dummy_taker_with_legacy_identity(
             "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
         )
     }
 
-    pub fn dummy_taker_with_counterparty_peer_id() -> Cfd {
-        Cfd::new(
+    pub fn dummy_taker_with_counterparty_peer_id() -> Order {
+        Order::new(
             OrderId::default(),
             OfferId::default(),
             Position::Long,
@@ -994,8 +968,8 @@ mod tests {
         )
     }
 
-    pub fn dummy_taker_with_legacy_identity(identity: &str) -> Cfd {
-        Cfd::new(
+    pub fn dummy_taker_with_legacy_identity(identity: &str) -> Order {
+        Order::new(
             OrderId::default(),
             OfferId::default(),
             Position::Long,
@@ -1021,7 +995,7 @@ mod tests {
         }
     }
 
-    pub fn setup_failed(cfd: &Cfd) -> CfdEvent {
+    pub fn setup_failed(cfd: &Order) -> CfdEvent {
         CfdEvent {
             timestamp: Timestamp::now(),
             id: cfd.id(),
@@ -1029,7 +1003,7 @@ mod tests {
         }
     }
 
-    pub fn order_rejected(cfd: &Cfd) -> CfdEvent {
+    pub fn order_rejected(cfd: &Order) -> CfdEvent {
         CfdEvent {
             timestamp: Timestamp::now(),
             id: cfd.id(),

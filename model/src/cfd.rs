@@ -3684,7 +3684,7 @@ mod tests {
         // we need to agree on same order id
         let order_id = OrderId::default();
 
-        let taker_long = Cfd::taker_long_from_order(
+        let taker_long = Order::taker_long_from_order(
             Offer::dummy_short()
                 .with_price(opening_price)
                 .with_funding_rate(FundingRate::new(funding_rate).unwrap()),
@@ -3693,7 +3693,7 @@ mod tests {
         )
         .with_id(order_id);
 
-        let maker_short = Cfd::maker_short_from_order(
+        let maker_short = Order::maker_short_from_order(
             Offer::dummy_short()
                 .with_price(opening_price)
                 .with_funding_rate(FundingRate::new(funding_rate).unwrap()),
@@ -3865,6 +3865,7 @@ mod tests {
     }
 
     impl CfdEvent {
+        // TODO(restioson): need to change this whole dummy_open concept
         fn dummy_open(event_id: BitMexPriceEventId) -> Vec<Self> {
             vec![
                 CfdEvent {
@@ -3970,69 +3971,7 @@ mod tests {
     }
 
     impl Cfd {
-        fn taker_long_from_order(mut offer: Offer, quantity: Usd, leverage: Leverage) -> Self {
-            offer.origin = Origin::Theirs;
-
-            Cfd::from_order(
-                OrderId::default(),
-                &offer,
-                quantity,
-                dummy_identity(),
-                dummy_peer_id(),
-                Role::Taker,
-                leverage,
-            )
-        }
-
-        fn maker_short_from_order(offer: Offer, quantity: Usd, leverage: Leverage) -> Self {
-            Cfd::from_order(
-                OrderId::default(),
-                &offer,
-                quantity,
-                dummy_identity(),
-                dummy_peer_id(),
-                Role::Maker,
-                leverage,
-            )
-        }
-
-        fn dummy_taker_long() -> Self {
-            Cfd::from_order(
-                OrderId::default(),
-                &Offer::dummy_short(),
-                Usd::new(dec!(1000)),
-                dummy_identity(),
-                dummy_peer_id(),
-                Role::Taker,
-                Leverage::TWO,
-            )
-        }
-
-        fn dummy_maker_short() -> Self {
-            Cfd::from_order(
-                OrderId::default(),
-                &Offer::dummy_short(),
-                Usd::new(dec!(1000)),
-                dummy_identity(),
-                dummy_peer_id(),
-                Role::Maker,
-                Leverage::TWO,
-            )
-        }
-
-        fn dummy_not_open_yet() -> Self {
-            Cfd::from_order(
-                OrderId::default(),
-                &Offer::dummy_short(),
-                Usd::new(dec!(1000)),
-                dummy_identity(),
-                dummy_peer_id(),
-                Role::Taker,
-                Leverage::TWO,
-            )
-        }
-
-        fn dummy_open(self, event_id: BitMexPriceEventId) -> Self {
+        pub fn dummy_open(self, event_id: BitMexPriceEventId) -> Self {
             CfdEvent::dummy_open(event_id)
                 .into_iter()
                 .fold(self, Cfd::apply)
@@ -4224,21 +4163,6 @@ mod tests {
             CfdEvent::dummy_final_cet(event_id)
                 .into_iter()
                 .fold(cfd, Cfd::apply)
-        }
-
-        fn with_id(mut self, order_id: OrderId) -> Self {
-            self.id = order_id;
-            self
-        }
-
-        fn with_quantity(mut self, quantity: Usd) -> Self {
-            self.quantity = quantity;
-            self
-        }
-
-        fn with_opening_price(mut self, price: Price) -> Self {
-            self.initial_price = price;
-            self
         }
 
         fn collab_settlement_payout(self, script: Script) -> Amount {
