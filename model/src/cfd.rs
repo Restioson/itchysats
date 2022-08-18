@@ -573,7 +573,7 @@ impl EventKind {
 pub struct Cfd {
     version: u32,
 
-    order: Order,
+    pub order: Order,
     dlc: Dlc,
 
     // dynamic (based on events)
@@ -605,66 +605,28 @@ pub struct Cfd {
 
     refund_timelock_expired: bool,
 
-    during_contract_setup: bool,
     during_rollover: bool,
     settlement_proposal: Option<SettlementProposal>,
 }
 
 impl Cfd {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        id: OrderId,
-        offer_id: OfferId,
-        position: Position,
-        initial_price: Price,
-        taker_leverage: Leverage,
-        settlement_interval: Duration, /* TODO: Make a newtype that enforces hours only so
-                                        * we don't have to deal with precisions in the
-                                        * database. */
-        role: Role,
-        quantity: Usd,
-        counterparty_network_identity: Identity,
-        counterparty_peer_id: Option<PeerId>,
-        opening_fee: OpeningFee,
-        initial_funding_rate: FundingRate,
-        initial_tx_fee_rate: TxFeeRate,
-        contract_symbol: ContractSymbol,
-        dlc: Dlc,
-    ) -> Self {
-        let (long_leverage, short_leverage) =
-            long_and_short_leverage(taker_leverage, role, position);
-
+    pub fn new(order: Order, dlc: Dlc) -> Cfd {
         let initial_funding_fee = FundingFee::calculate(
-            initial_price,
-            quantity,
-            long_leverage,
-            short_leverage,
-            initial_funding_rate,
+            order.initial_price(),
+            order.quantity(),
+            order.long_leverage(),
+            order.short_leverage(),
+            order.initial_funding_rate(),
             SETTLEMENT_INTERVAL.whole_hours(),
         )
         .expect("values from db to be sane");
 
         Cfd {
             version: 0,
-            order: Order::new(
-                id,
-                offer_id,
-                position,
-                initial_price,
-                taker_leverage,
-                settlement_interval,
-                role,
-                quantity,
-                counterparty_network_identity,
-                counterparty_peer_id,
-                opening_fee,
-                initial_funding_rate,
-                initial_tx_fee_rate,
-                contract_symbol,
-            ),
+            order: order,
             dlc,
-            fee_account: FeeAccount::new(position, role)
-                .add_opening_fee(opening_fee)
+            fee_account: FeeAccount::new(order.position(), order.role())
+                .add_opening_fee(order.opening_fee())
                 .add_funding_fee(initial_funding_fee),
             cet: None,
             commit_tx: None,
@@ -677,7 +639,6 @@ impl Cfd {
             collaborative_settlement_finality: false,
             cet_timelock_expired: false,
             refund_timelock_expired: false,
-            during_contract_setup: false,
             during_rollover: false,
             settlement_proposal: None,
         }
@@ -1575,7 +1536,7 @@ impl Cfd {
         self.version += 1;
 
         match evt.event {
-            ContractSetupStarted => self.during_contract_setup = true,
+            ContractSetupStarted | ContractSetupFailed => (), // TODO(restioson)
             ContractSetupCompleted {
                 dlc
             } => {
@@ -1583,7 +1544,6 @@ impl Cfd {
                 if let Some(dlc) = dlc {
                     self.dlc = dlc;
                 }
-                self.during_contract_setup = false;
             }
             OracleAttestedPostCetTimelock { cet, .. } => self.cet = Some(cet),
             OracleAttestedPriorCetTimelock {
@@ -1595,9 +1555,6 @@ impl Cfd {
                 if self.commit_tx.is_none() {
                     self.commit_tx = commit_tx;
                 }
-            }
-            ContractSetupFailed { .. } => {
-                self.during_contract_setup = false;
             }
             RolloverStarted => {
                 self.during_rollover = true;

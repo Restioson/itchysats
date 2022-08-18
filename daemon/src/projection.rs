@@ -354,72 +354,56 @@ enum ProtocolNegotiationState {
 
 impl Cfd {
     fn new(
-        sqlite_db::Cfd {
-            id,
-            offer_id,
-            position,
-            initial_price,
-            taker_leverage,
-            quantity_usd,
-            counterparty_network_identity,
-            role,
-            opening_fee,
-            initial_funding_rate,
-            contract_symbol,
-            ..
-        }: sqlite_db::Cfd,
+        cfd: sqlite_db::Cfd,
         network: Network,
     ) -> Self {
-        let (our_leverage, counterparty_leverage) = match role {
-            Role::Maker => (Leverage::ONE, taker_leverage),
-            Role::Taker => (taker_leverage, Leverage::ONE),
+        let (our_leverage, counterparty_leverage) = match cfd.order.role() {
+            Role::Maker => (Leverage::ONE, cfd.order.taker_leverage()),
+            Role::Taker => (cfd.order.taker_leverage(), Leverage::ONE),
         };
 
-        let margin = calculate_margin(initial_price, quantity_usd, our_leverage);
+        let margin = calculate_margin(cfd.order.initial_price(), cfd.order.quantity(), our_leverage);
         let margin_counterparty =
-            calculate_margin(initial_price, quantity_usd, counterparty_leverage);
+            calculate_margin(cfd.order.initial_price(), cfd.order.quantity(), counterparty_leverage);
 
-        let liquidation_price = match position {
-            Position::Long => calculate_long_liquidation_price(our_leverage, initial_price),
-            Position::Short => calculate_short_liquidation_price(our_leverage, initial_price),
+        let liquidation_price = match cfd.order.position() {
+            Position::Long => calculate_long_liquidation_price(our_leverage, cfd.order.initial_price()),
+            Position::Short => calculate_short_liquidation_price(our_leverage, cfd.order.initial_price()),
         };
-
-        let (long_leverage, short_leverage) =
-            long_and_short_leverage(taker_leverage, role, position);
 
         let initial_funding_fee = FundingFee::calculate(
-            initial_price,
-            quantity_usd,
-            long_leverage,
-            short_leverage,
-            initial_funding_rate,
+            cfd.order.initial_price(),
+            cfd.order.quantity(),
+            cfd.order.long_leverage(),
+            cfd.order.short_leverage(),
+            cfd.order.initial_funding_rate(),
             SETTLEMENT_INTERVAL.whole_hours(),
         )
         .expect("values from db to be sane");
 
-        let fee_account = FeeAccount::new(position, role)
-            .add_opening_fee(opening_fee)
+        let fee_account = FeeAccount::new(cfd.order.position(), cfd.order.role())
+            .add_opening_fee(cfd.order.opening_fee())
             .add_funding_fee(initial_funding_fee);
 
-        let initial_actions = if role == Role::Maker {
+        let initial_actions = if cfd.order.role() == Role::Maker {
             HashSet::from([CfdAction::AcceptOrder, CfdAction::RejectOrder])
         } else {
             HashSet::new()
         };
 
         Self {
-            order_id: id,
-            offer_id,
-            initial_price,
+            order_id: cfd.order.id(),
+            offer_id: cfd.order.offer_id(),
+            initial_price: cfd.order.initial_price(),
             accumulated_fees: fee_account.balance(),
-            leverage_taker: taker_leverage,
-            contract_symbol,
-            position,
+            leverage_taker: cfd.order.taker_leverage(),
+            contract_symbol: cfd.order.contract_symbol(),
+            position: cfd.order.position(),
             liquidation_price,
-            quantity_usd,
+            quantity_usd: cfd.order.quantity(),
             margin,
             margin_counterparty,
-            role,
+            role: cfd.order.role(),
 
             profit_btc: None,
             profit_percent: None,
@@ -432,7 +416,7 @@ impl Cfd {
                 tx_url_list: HashSet::new(),
             },
             expiry_timestamp: None,
-            counterparty: counterparty_network_identity,
+            counterparty: cfd.order.counterparty_network_identity(),
             pending_settlement_proposal_price: None,
             aggregated: Aggregated::new(fee_account),
             network,

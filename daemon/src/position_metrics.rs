@@ -152,23 +152,23 @@ impl sqlite_db::CfdAggregate for Cfd {
     type CtorArgs = ();
 
     fn new(_: Self::CtorArgs, cfd: sqlite_db::Cfd) -> Self {
-        let (our_leverage, counterparty_leverage) = match cfd.role {
-            Role::Maker => (Leverage::ONE, cfd.taker_leverage),
-            Role::Taker => (cfd.taker_leverage, Leverage::ONE),
+        let (our_leverage, counterparty_leverage) = match cfd.order.role() {
+            Role::Maker => (Leverage::ONE, cfd.order.taker_leverage()),
+            Role::Taker => (cfd.order.taker_leverage(), Leverage::ONE),
         };
 
-        let margin = calculate_margin(cfd.initial_price, cfd.quantity_usd, our_leverage);
+        let margin = calculate_margin(cfd.order.initial_price(), cfd.order.quantity(), our_leverage);
         let margin_counterparty =
-            calculate_margin(cfd.initial_price, cfd.quantity_usd, counterparty_leverage);
+            calculate_margin(cfd.order.initial_price(), cfd.order.quantity(), counterparty_leverage);
 
         Self {
-            id: cfd.id,
-            position: cfd.position,
-            quantity_usd: cfd.quantity_usd,
+            id: cfd.order.id(),
+            position: cfd.order.position(),
+            quantity_usd: cfd.order.quantity(),
             margin,
             margin_counterparty,
             state: AggregatedState::New,
-            counterparty_network_identity: cfd.counterparty_network_identity,
+            counterparty_network_identity: cfd.order.counterparty_network_identity(),
             version: 0,
         }
     }

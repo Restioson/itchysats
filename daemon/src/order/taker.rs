@@ -107,7 +107,6 @@ impl Actor {
 
                 let oracle_event_id = offer.oracle_event_id;
 
-                // TODO(restioson): not a CFD yet
                 let order = Order::from_taken_offer(
                     order_id,
                     &offer,
@@ -120,12 +119,13 @@ impl Actor {
 
                 // If this fails we shouldn't try to append
                 // `ContractSetupFailed` to the nonexistent CFD
-                if let Err(e) = db.insert_cfd(&cfd).await {
+                if let Err(e) = db.insert_order(&order).await {
                     tracing::error!("Inserting new cfd failed: {e:#}");
                     return anyhow::Ok(());
                 };
 
-                projection.send(projection::CfdChanged(cfd.id())).await?;
+                // TODO(restioson): not a CFD yet
+                projection.send(projection::CfdChanged(order.id())).await?;
 
                 let stream = endpoint
                     .send(OpenSubstream::single_protocol(maker_peer_id, PROTOCOL))
@@ -165,8 +165,9 @@ impl Actor {
                     MakerMessage::ContractSetupMsg(_) => bail!("Unexpected message"),
                 };
 
+                // TODO(restioson): not a CFD yet
                 let (setup_params, position) = executor
-                    .execute(order_id, |cfd| cfd.start_contract_setup())
+                    .execute_on_order(order_id, |cfd| Ok(cfd.start_contract_setup()))
                     .await?;
 
                 let (sink, stream) = framed.split();

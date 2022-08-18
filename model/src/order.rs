@@ -1,4 +1,4 @@
-use crate::{AsBlocks, calculate_margin};
+use crate::{AsBlocks, calculate_margin, FundingFee, SETTLEMENT_INTERVAL};
 use crate::long_and_short_leverage;
 use crate::Amount;
 use crate::CfdEvent;
@@ -137,13 +137,27 @@ impl Order {
         }
     }
 
-    // TODO(restioson): what *is* fee_account
     pub fn start_contract_setup(
         &self,
-        fee_account: FeeAccount,
     ) -> (CfdEvent, SetupParams, Position) {
         let margin = self.margin();
         let counterparty_margin = self.counterparty_margin();
+
+        // TODO(restioson): is this correct?
+        // TODO(restioson): extract?
+        let initial_funding_fee = FundingFee::calculate(
+            self.initial_price(),
+            self.quantity(),
+            self.long_leverage(),
+            self.short_leverage(),
+            self.initial_funding_rate(),
+            SETTLEMENT_INTERVAL.whole_hours(),
+        )
+        .expect("values from db to be sane");
+
+        let fee_account = FeeAccount::new(self.position(), self.role())
+            .add_opening_fee(self.opening_fee())
+            .add_funding_fee(initial_funding_fee);
 
         (
             CfdEvent::new(self.id, EventKind::ContractSetupStarted),

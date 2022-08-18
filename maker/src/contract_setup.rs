@@ -85,7 +85,7 @@ impl Actor {
 
         let (setup_params, position) = self
             .executor
-            .execute(order_id, |cfd| cfd.start_contract_setup())
+            .execute_on_order(order_id, |cfd| Ok(cfd.start_contract_setup()))
             .await?;
 
         let taker_id = setup_params.counterparty_identity();

@@ -11,21 +11,19 @@
 //! to call the `crate::db::load_all_cfds` API, which loads all types
 //! of CFD.
 
-use crate::delete_from_cfds_table;
+use crate::{delete_from_cfds_table, load_order_and_row_id};
 use crate::delete_from_events_table;
 use crate::derive_known_peer_id;
 use crate::event_log::EventLog;
 use crate::event_log::EventLogEntry;
 use crate::load_cfd_events;
-use crate::load_cfd_row_and_dlc;
 use crate::models;
-use crate::Cfd;
 use crate::CfdAggregate;
 use crate::Connection;
 use anyhow::bail;
 use anyhow::Result;
 use model::libp2p::PeerId;
-use model::long_and_short_leverage;
+use model::Order;
 use model::EventKind;
 use model::FailedCfd;
 use model::FeeAccount;
@@ -56,12 +54,12 @@ impl Connection {
                 let mut conn = pool.acquire().await?;
                 let mut db_tx = conn.begin().await?;
 
-                let cfd = load_cfd_row_and_dlc(&mut db_tx, id).await?;
+                let (order, _) = load_order_and_row_id(&mut db_tx, id).await?;
 
                 let events = load_cfd_events(&mut db_tx, id, 0).await?;
                 let event_log = EventLog::new(&events);
 
-                insert_failed_cfd(&mut db_tx, cfd, &event_log).await?;
+                insert_failed_order(&mut db_tx, order, &event_log).await?;
                 insert_event_log(&mut db_tx, id, event_log).await?;
 
                 delete_from_events_table(&mut db_tx, id).await?;
@@ -156,9 +154,9 @@ impl Connection {
     }
 }
 
-async fn insert_failed_cfd(
+async fn insert_failed_order(
     conn: &mut SqliteConnection,
-    cfd: Cfd,
+    order: Order,
     event_log: &EventLog,
 ) -> Result<()> {
     let kind = if event_log.contains(&EventKind::OfferRejected) {
@@ -169,48 +167,45 @@ async fn insert_failed_cfd(
         bail!("Failed CFD does not have expected event")
     };
 
-    let n_contracts = cfd
-        .quantity_usd
+    let n_contracts = order
+        .quantity()
         .try_into_u64()
         .expect("number of contracts to fit into a u64");
     let n_contracts = models::Contracts::from(n_contracts);
 
     let fees = {
-        let (long_leverage, short_leverage) =
-            long_and_short_leverage(cfd.taker_leverage, cfd.role, cfd.position);
-
         let initial_funding_fee = FundingFee::calculate(
-            cfd.initial_price,
-            cfd.quantity_usd,
-            long_leverage,
-            short_leverage,
-            cfd.initial_funding_rate,
-            cfd.settlement_interval.whole_hours(),
+            order.initial_price(),
+            order.quantity(),
+            order.long_leverage(),
+            order.short_leverage(),
+            order.initial_funding_rate(),
+            order.settlement_time_interval_hours().whole_hours(),
         )
         .expect("values from db to be sane");
 
-        let fee_account = FeeAccount::new(cfd.position, cfd.role)
-            .add_opening_fee(cfd.opening_fee)
+        let fee_account = FeeAccount::new(order.position(), order.role())
+            .add_opening_fee(order.opening_fee())
             .add_funding_fee(initial_funding_fee);
 
         models::Fees::from(fee_account.balance())
     };
 
-    let counterparty_peer_id = match cfd.counterparty_peer_id {
-        None => derive_known_peer_id(cfd.counterparty_network_identity, cfd.role)
+    let counterparty_peer_id = match order.counterparty_peer_id() {
+        None => derive_known_peer_id(order.counterparty_network_identity(), order.role())
             .unwrap_or_else(PeerId::placeholder),
         Some(peer_id) => peer_id,
     };
 
-    let id = models::OrderId::from(cfd.id);
-    let offer_id = models::OfferId::from(cfd.offer_id);
-    let role = models::Role::from(cfd.role);
-    let initial_price = models::Price::from(cfd.initial_price);
-    let taker_leverage = models::Leverage::from(cfd.taker_leverage);
-    let position = models::Position::from(cfd.position);
-    let counterparty_network_identity = models::Identity::from(cfd.counterparty_network_identity);
+    let id = models::OrderId::from(order.id());
+    let offer_id = models::OfferId::from(order.offer_id());
+    let role = models::Role::from(order.role());
+    let initial_price = models::Price::from(order.initial_price());
+    let taker_leverage = models::Leverage::from(order.taker_leverage());
+    let position = models::Position::from(order.position());
+    let counterparty_network_identity = models::Identity::from(order.counterparty_network_identity());
     let counterparty_peer_id = models::PeerId::from(counterparty_peer_id);
-    let contract_symbol = models::ContractSymbol::from(cfd.contract_symbol);
+    let contract_symbol = models::ContractSymbol::from(order.contract_symbol());
 
     let query_result = sqlx::query!(
         r#"

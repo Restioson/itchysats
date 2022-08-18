@@ -8,21 +8,12 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::Stream;
 use model::libp2p::PeerId;
-use model::CfdEvent;
-use model::ContractSymbol;
+use model::{CfdEvent, Order};
 use model::Dlc;
 use model::EventKind;
-use model::FundingRate;
 use model::Identity;
-use model::Leverage;
-use model::OfferId;
-use model::OpeningFee;
 use model::OrderId;
-use model::Position;
-use model::Price;
 use model::Role;
-use model::TxFeeRate;
-use model::Usd;
 use sqlx::migrate::MigrateError;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::Acquire;
@@ -150,24 +141,28 @@ async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 
 impl Connection {
     pub async fn insert_cfd(&self, cfd: &model::Cfd) -> Result<()> {
+        self.insert_order(&cfd.order).await
+    }
+
+    pub async fn insert_order(&self, order: &Order) -> Result<()> {
         let mut conn = self.inner.acquire().await?;
 
-        let order_id = models::OrderId::from(cfd.id());
-        let offer_id = models::OfferId::from(cfd.offer_id());
+        let order_id = models::OrderId::from(order.id());
+        let offer_id = models::OfferId::from(order.offer_id());
 
-        let role = models::Role::from(cfd.role());
-        let quantity = models::Usd::from(cfd.quantity());
-        let initial_price = models::Price::from(cfd.initial_price());
-        let leverage = models::Leverage::from(cfd.taker_leverage());
+        let role = models::Role::from(order.role());
+        let quantity = models::Usd::from(order.quantity());
+        let initial_price = models::Price::from(order.initial_price());
+        let leverage = models::Leverage::from(order.taker_leverage());
 
-        let position = models::Position::from(cfd.position());
+        let position = models::Position::from(order.position());
         let counterparty_network_identity =
-            models::Identity::from(cfd.counterparty_network_identity());
-        let initial_funding_rate = models::FundingRate::from(cfd.initial_funding_rate());
-        let opening_fee = models::OpeningFee::from(cfd.opening_fee());
-        let tx_fee_rate = models::TxFeeRate::from(cfd.initial_tx_fee_rate());
-        let counterparty_peer_id = cfd.counterparty_peer_id().map(models::PeerId::from);
-        let contract_symbol = models::ContractSymbol::from(cfd.contract_symbol());
+            models::Identity::from(order.counterparty_network_identity());
+        let initial_funding_rate = models::FundingRate::from(order.initial_funding_rate());
+        let opening_fee = models::OpeningFee::from(order.opening_fee());
+        let tx_fee_rate = models::TxFeeRate::from(order.initial_tx_fee_rate());
+        let counterparty_peer_id = order.counterparty_peer_id().map(models::PeerId::from);
+        let contract_symbol = models::ContractSymbol::from(order.contract_symbol());
 
         let query_result = sqlx::query(
             r#"
@@ -188,29 +183,29 @@ impl Connection {
             contract_symbol
         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
         )
-        .bind(&order_id)
-        .bind(&offer_id)
-        .bind(&position)
-        .bind(&initial_price)
-        .bind(&leverage)
-        .bind(&cfd.settlement_time_interval_hours().whole_hours())
-        .bind(&quantity)
-        .bind(&counterparty_network_identity)
-        .bind(&counterparty_peer_id.unwrap_or_else(|| {
-            tracing::debug!(
-                order_id=%cfd.id(),
-                counterparty_identity=%cfd.counterparty_network_identity(),
+            .bind(&order_id)
+            .bind(&offer_id)
+            .bind(&position)
+            .bind(&initial_price)
+            .bind(&leverage)
+            .bind(&order.settlement_time_interval_hours().whole_hours())
+            .bind(&quantity)
+            .bind(&counterparty_network_identity)
+            .bind(&counterparty_peer_id.unwrap_or_else(|| {
+                tracing::debug!(
+                order_id=%order.id(),
+                counterparty_identity=%order.counterparty_network_identity(),
                 "Inserting deprecated CFD with placeholder peer-id"
             );
-            models::PeerId::from(model::libp2p::PeerId::placeholder())
-        }))
-        .bind(&role)
-        .bind(&opening_fee)
-        .bind(&initial_funding_rate)
-        .bind(&tx_fee_rate)
-        .bind(&contract_symbol)
-        .execute(&mut conn)
-        .await?;
+                models::PeerId::from(model::libp2p::PeerId::placeholder())
+            }))
+            .bind(&role)
+            .bind(&opening_fee)
+            .bind(&initial_funding_rate)
+            .bind(&tx_fee_rate)
+            .bind(&contract_symbol)
+            .execute(&mut conn)
+            .await?;
 
         if query_result.rows_affected() != 1 {
             bail!("failed to insert cfd");
@@ -218,6 +213,7 @@ impl Connection {
 
         Ok(())
     }
+
 
     /// Appends an event to the `events` table.
     ///
@@ -335,6 +331,14 @@ impl Connection {
         db_tx.commit().await?;
 
         Ok(cfd)
+    }
+
+    pub async fn load_open_order(&self, id: OrderId) -> Result<Order> {
+        let mut conn = self.inner.acquire().await?;
+        let mut db_tx = conn.begin().await?;
+        let (order, _) = load_order_and_row_id(&mut db_tx, id).await?;
+        db_tx.commit().await?;
+        Ok(order)
     }
 
     pub fn load_all_cfds<'a, C>(
@@ -513,20 +517,7 @@ impl Connection {
 // newtype for `settlement_interval`.
 #[derive(Clone)]
 pub struct Cfd {
-    pub id: OrderId,
-    pub offer_id: OfferId,
-    pub position: Position,
-    pub initial_price: Price,
-    pub taker_leverage: Leverage,
-    pub settlement_interval: Duration,
-    pub quantity_usd: Usd,
-    pub counterparty_network_identity: Identity,
-    pub counterparty_peer_id: Option<PeerId>,
-    pub role: Role,
-    pub opening_fee: OpeningFee,
-    pub initial_funding_rate: FundingRate,
-    pub initial_tx_fee_rate: TxFeeRate,
-    pub contract_symbol: ContractSymbol,
+    pub order: Order,
     pub dlc: Dlc,
 }
 
@@ -573,7 +564,7 @@ pub trait CfdAggregate: Clone + Send + Sync + 'static {
     fn version(&self) -> u32;
 }
 
-async fn load_cfd_row_and_dlc(conn: &mut SqliteConnection, id: OrderId) -> Result<Cfd, Error> {
+async fn load_order_and_row_id(conn: &mut SqliteConnection, id: OrderId) -> Result<(Order, i64)> {
     let id = models::OrderId::from(id);
 
     let cfd_row = sqlx::query!(
@@ -615,23 +606,32 @@ async fn load_cfd_row_and_dlc(conn: &mut SqliteConnection, id: OrderId) -> Resul
         Some(cfd_row.counterparty_peer_id.into())
     };
 
-    let dlc = load_dlc(&mut *conn, cfd_row.cfd_id).await?;
-
-    Ok(Cfd {
-        id: cfd_row.order_id.into(),
-        offer_id: cfd_row.offer_id.into(),
-        position: cfd_row.position.into(),
-        initial_price: cfd_row.initial_price.into(),
-        taker_leverage: cfd_row.leverage.into(),
-        settlement_interval: Duration::hours(cfd_row.settlement_time_interval_hours),
-        quantity_usd: cfd_row.quantity_usd.into(),
+    let order = Order::new(
+        cfd_row.order_id.into(),
+        cfd_row.offer_id.into(),
+        cfd_row.position.into(),
+        cfd_row.initial_price.into(),
+        cfd_row.leverage.into(),
+        Duration::hours(cfd_row.settlement_time_interval_hours),
+        role,
+        cfd_row.quantity_usd.into(),
         counterparty_network_identity,
         counterparty_peer_id,
-        role,
-        opening_fee: cfd_row.opening_fee.into(),
-        initial_funding_rate: cfd_row.initial_funding_rate.into(),
-        initial_tx_fee_rate: cfd_row.initial_tx_fee_rate.into(),
-        contract_symbol: cfd_row.contract_symbol.into(),
+        cfd_row.opening_fee.into(),
+        cfd_row.initial_funding_rate.into(),
+        cfd_row.initial_tx_fee_rate.into(),
+        cfd_row.contract_symbol.into(),
+    );
+
+    Ok((order, cfd_row.cfd_id))
+}
+
+async fn load_cfd_row_and_dlc(conn: &mut SqliteConnection, id: OrderId) -> Result<Cfd, Error> {
+    let (order, row_id) = load_order_and_row_id(&mut *conn, id).await?;
+    let dlc = load_dlc(&mut *conn, row_id).await?;
+
+    Ok(Cfd {
+        order,
         dlc,
     })
 }

@@ -139,7 +139,7 @@ impl sqlite_db::CfdAggregate for Cfd {
 
     fn new(_: Self::CtorArgs, cfd: sqlite_db::Cfd) -> Self {
         Self {
-            id: cfd.id,
+            id: cfd.order.id(),
             monitor_lock_finality: None,
             monitor_commit_finality: None,
             monitor_cet_timelock: false,

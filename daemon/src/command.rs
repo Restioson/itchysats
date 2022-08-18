@@ -3,7 +3,7 @@ use crate::OrderId;
 use anyhow::Context;
 use anyhow::Result;
 use async_trait::async_trait;
-use model::Cfd;
+use model::{Cfd, Order};
 use model::ExtractEventFromTuple;
 use sqlite_db;
 use std::fmt;
@@ -47,6 +47,32 @@ impl Executor {
             .context("Failed to load CFD")?;
 
         let return_val = command(cfd).context("Failed to execute command on CFD")?;
+
+        let (event, rest) = return_val.extract_event();
+
+        if let Some(event) = event {
+            self.process_manager
+                .send(process_manager::Event::new(event))
+                .await
+                .context("ProcessManager is disconnected")?
+                .context("Failed to process new domain event")?;
+        }
+
+        Ok(rest)
+    }
+
+    pub async fn execute_on_order<T: ExtractEventFromTuple>(
+        &self,
+        id: OrderId,
+        command: impl FnOnce(Order) -> Result<T>, // TODO(restioson): just return T?
+    ) -> Result<T::Rest> {
+        let cfd = self
+            .db
+            .load_open_order(id)
+            .await
+            .context("Failed to load CFD")?;
+
+        let return_val = command(cfd).context("Failed to execute command on order")?;
 
         let (event, rest) = return_val.extract_event();
 

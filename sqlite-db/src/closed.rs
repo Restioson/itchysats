@@ -28,7 +28,6 @@ use bdk::bitcoin::Script;
 use bdk::miniscript::DescriptorTrait;
 use maia_core::TransactionExt;
 use model::libp2p::PeerId;
-use model::long_and_short_leverage;
 use model::CfdEvent;
 use model::ClosedCfd;
 use model::ContractSymbol;
@@ -236,53 +235,36 @@ struct ClosedCfdInputAggregate {
 
 impl ClosedCfdInputAggregate {
     fn new(cfd: Cfd) -> Self {
-        let Cfd {
-            id,
-            offer_id,
-            position,
-            initial_price,
-            taker_leverage,
-            settlement_interval: _,
-            quantity_usd,
-            counterparty_network_identity,
-            counterparty_peer_id,
-            role,
-            opening_fee,
-            initial_funding_rate,
-            contract_symbol,
-            ..
-        } = cfd;
-        let n_contracts = quantity_usd
+        let order = cfd.order;
+        let n_contracts = order
+            .quantity()
             .try_into_u64()
             .expect("number of contracts to fit into a u64");
         let n_contracts = Contracts::new(n_contracts);
 
         let initial_funding_fee = {
-            let (long_leverage, short_leverage) =
-                long_and_short_leverage(taker_leverage, role, position);
-
             FundingFee::calculate(
-                initial_price,
-                quantity_usd,
-                long_leverage,
-                short_leverage,
-                initial_funding_rate,
+                order.initial_price(),
+                order.quantity(),
+                order.long_leverage(),
+                order.short_leverage(),
+                order.initial_funding_rate(),
                 SETTLEMENT_INTERVAL.whole_hours(),
             )
             .expect("values from db to be sane")
         };
 
         Self {
-            id,
-            offer_id,
-            position,
-            initial_price,
-            taker_leverage,
+            id: order.id(),
+            offer_id: order.offer_id(),
+            position: order.position(),
+            initial_price: order.initial_price(),
+            taker_leverage: order.taker_leverage(),
             n_contracts,
-            counterparty_network_identity,
-            counterparty_peer_id,
-            role,
-            fee_account: FeeAccount::new(position, role).add_opening_fee(opening_fee),
+            counterparty_network_identity: order.counterparty_network_identity(),
+            counterparty_peer_id: order.counterparty_peer_id(),
+            role: order.role(),
+            fee_account: FeeAccount::new(order.position(), order.role()).add_opening_fee(order.opening_fee()),
             initial_funding_fee,
             latest_dlc: None,
             collaborative_settlement: None,
@@ -290,7 +272,7 @@ impl ClosedCfdInputAggregate {
             cet_confirmed: false,
             collaborative_settlement_confirmed: false,
             refund_confirmed: false,
-            contract_symbol,
+            contract_symbol: order.contract_symbol(),
         }
     }
 

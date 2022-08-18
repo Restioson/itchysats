@@ -21,7 +21,7 @@ use daemon::wire;
 use maia_core::secp256k1_zkp::XOnlyPublicKey;
 use maia_core::PartyParams;
 use model::libp2p::PeerId;
-use model::olivia;
+use model::{olivia, Order};
 use model::olivia::Announcement;
 use model::olivia::BitMexPriceEventId;
 use model::Cfd;
@@ -365,7 +365,7 @@ where
             return Ok(());
         };
 
-        let cfd = Cfd::from_order(
+        let order = Order::from_taken_offer(
             // For the legacy code offer_id = order_id because of the constraint that an offer can
             // only be take by exactly one taker
             order_id,
@@ -418,9 +418,10 @@ where
             )))
             .await?;
 
-        self.db.insert_cfd(&cfd).await?;
+        // TODO(restioson): not a CFD yet
+        self.db.insert_order(&order).await?;
         self.projection
-            .send(projection::CfdChanged(cfd.id()))
+            .send(projection::CfdChanged(order.id()))
             .await?;
 
         // 4. Try to get the oracle announcement, if that fails we should exit prior to changing any
@@ -436,7 +437,7 @@ where
         let (addr, fut) = contract_setup::Actor::new(
             self.db.clone(),
             self.process_manager.clone(),
-            (order_to_take.clone(), cfd.quantity(), self.n_payouts),
+            (order_to_take.clone(), order.quantity(), self.n_payouts),
             (self.oracle_pk, announcement[0].clone()),
             self.wallet.clone().into(),
             self.wallet.clone().into(),
