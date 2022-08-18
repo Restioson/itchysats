@@ -9,58 +9,19 @@ mod tests {
     use super::*;
     use crate::memory;
     use crate::models;
+    use crate::tests::dummy_cfd;
+    use crate::tests::extract_rollover_completed_data;
     use anyhow::bail;
     use anyhow::Context;
     use anyhow::Result;
-    use bdk::bitcoin::Amount;
     use model::olivia::BitMexPriceEventId;
-    use model::{Cfd, Order};
     use model::CfdEvent;
-    use model::CompleteFee;
-    use model::ContractSymbol;
-    use model::Dlc;
     use model::EventKind;
-    use model::FundingFee;
-    use model::FundingRate;
-    use model::Leverage;
-    use model::OfferId;
-    use model::OpeningFee;
     use model::OrderId;
-    use model::Position;
-    use model::Price;
-    use model::Role;
     use model::Timestamp;
-    use model::TxFeeRate;
-    use model::Usd;
-    use rust_decimal_macros::dec;
     use sqlx::SqliteConnection;
     use time::macros::datetime;
-    use time::Duration;
     use time::OffsetDateTime;
-
-    pub fn dummy_cfd(order_id: OrderId, dlc: Dlc) -> Cfd {
-        Cfd::new(
-            Order::new(
-                order_id,
-                OfferId::default(),
-                Position::Long,
-                Price::new(dec!(60_000)).unwrap(),
-                Leverage::TWO,
-                Duration::hours(24),
-                Role::Taker,
-                Usd::new(dec!(1_000)),
-                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
-                    .parse()
-                    .unwrap(),
-                None,
-                OpeningFee::new(Amount::from_sat(2000)),
-                FundingRate::default(),
-                TxFeeRate::default(),
-                ContractSymbol::BtcUsd,
-            ),
-            dlc
-        )
-    }
 
     #[tokio::test]
     async fn test_insert_rollover_completed_event_data_should_not_error() {
@@ -181,7 +142,9 @@ mod tests {
 
         let cfd = dummy_cfd(rollover_completed.id, dlc.clone());
         db.insert_cfd(&cfd).await.context("inserting cfd failed")?;
-        db.append_event(rollover_completed.clone()).await.context("appending rollovercompleted failed")?;
+        db.append_event(rollover_completed.clone())
+            .await
+            .context("appending rollovercompleted failed")?;
 
         overwrite(
             &mut *conn,
@@ -343,17 +306,6 @@ mod tests {
             _ => {
                 bail!("We should always have a RolloverCompleted event")
             }
-        }
-    }
-
-    fn extract_rollover_completed_data(event: EventKind) -> (Dlc, FundingFee, Option<CompleteFee>) {
-        match event {
-            EventKind::RolloverCompleted {
-                dlc: Some(dlc),
-                funding_fee,
-                complete_fee,
-            } => (dlc, funding_fee, complete_fee),
-            _ => panic!("Expected RolloverCompleted event with DLC"),
         }
     }
 }

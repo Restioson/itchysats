@@ -4,10 +4,7 @@ impl crate::CfdAggregate for model::Cfd {
     type CtorArgs = ();
 
     // TODO(restioson): separate dlc loading
-    fn new(
-        _: Self::CtorArgs,
-        cfd: crate::Cfd,
-    ) -> Self {
+    fn new(_: Self::CtorArgs, cfd: crate::Cfd) -> Self {
         model::Cfd::new(cfd.order, cfd.dlc)
     }
 

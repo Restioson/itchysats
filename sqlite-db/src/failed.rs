@@ -11,23 +11,24 @@
 //! to call the `crate::db::load_all_cfds` API, which loads all types
 //! of CFD.
 
-use crate::{delete_from_cfds_table, load_order_and_row_id};
+use crate::delete_from_cfds_table;
 use crate::delete_from_events_table;
 use crate::derive_known_peer_id;
 use crate::event_log::EventLog;
 use crate::event_log::EventLogEntry;
 use crate::load_cfd_events;
+use crate::load_order_and_row_id;
 use crate::models;
 use crate::CfdAggregate;
 use crate::Connection;
 use anyhow::bail;
 use anyhow::Result;
 use model::libp2p::PeerId;
-use model::Order;
 use model::EventKind;
 use model::FailedCfd;
 use model::FeeAccount;
 use model::FundingFee;
+use model::Order;
 use model::OrderId;
 use model::Timestamp;
 use models::FailedKind;
@@ -203,7 +204,8 @@ async fn insert_failed_order(
     let initial_price = models::Price::from(order.initial_price());
     let taker_leverage = models::Leverage::from(order.taker_leverage());
     let position = models::Position::from(order.position());
-    let counterparty_network_identity = models::Identity::from(order.counterparty_network_identity());
+    let counterparty_network_identity =
+        models::Identity::from(order.counterparty_network_identity());
     let counterparty_peer_id = models::PeerId::from(counterparty_peer_id);
     let contract_symbol = models::ContractSymbol::from(order.contract_symbol());
 
@@ -317,10 +319,14 @@ async fn load_creation_timestamp(conn: &mut SqliteConnection, id: OrderId) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cfd, memory};
+    use crate::memory;
+    use crate::tests::dummy_cfd;
     use crate::tests::dummy_order;
+    use crate::tests::extract_rollover_completed_data;
+    use crate::tests::lock_confirmed;
     use crate::tests::order_rejected;
     use crate::tests::setup_failed;
+    use crate::Cfd;
     use model::CfdEvent;
 
     #[tokio::test]
@@ -378,35 +384,44 @@ mod tests {
         assert!(load_from_failed.is_ok());
     }
 
-    // TODO(restioson): restore test
-    // #[tokio::test]
-    // async fn given_cfd_without_failed_events_when_move_cfds_to_failed_table_then_cannot_load_cfd_as_failed(
-    // ) {
-    //     let db = memory().await.unwrap();
-    //     let mut conn = db.inner.acquire().await.unwrap();
-    //
-    //     let order = dummy_order();
-    //     let order_id = order.id();
-    //
-    //     db.insert_order(&order).await.unwrap();
-    //
-    //     // appending an event which does not imply that the CFD failed
-    //     db.append_event(lock_confirmed(&order)).await.unwrap();
-    //
-    //     db.move_to_failed_cfds().await.unwrap();
-    //
-    //     let load_from_open = db.load_open_cfd::<DummyAggregate>(order_id, ()).await;
-    //     let load_from_events = {
-    //         let res = load_cfd_events(&mut *conn, order_id, 0).await.unwrap();
-    //
-    //         res
-    //     };
-    //     let load_from_failed = db.load_failed_cfd::<DummyAggregate>(order_id, ()).await;
-    //
-    //     assert!(load_from_open.is_ok());
-    //     assert_eq!(load_from_events.len(), 1);
-    //     assert!(load_from_failed.is_err());
-    // }
+    #[tokio::test]
+    async fn given_cfd_without_failed_events_when_move_cfds_to_failed_table_then_cannot_load_cfd_as_failed(
+    ) {
+        let db = memory().await.unwrap();
+        let mut conn = db.inner.acquire().await.unwrap();
+
+        let timestamp = Timestamp::now();
+        let event = std::fs::read_to_string("./src/test_events/rollover_completed.json").unwrap();
+        let event = serde_json::from_str::<EventKind>(&event).unwrap();
+        let rollover_completed = CfdEvent {
+            timestamp,
+            id: OrderId::default(),
+            event: event.clone(),
+        };
+
+        let (dlc, _funding, _complete) = extract_rollover_completed_data(event);
+        let cfd = dummy_cfd(rollover_completed.id, dlc.clone());
+
+        db.insert_cfd(&cfd).await.unwrap();
+        db.append_event(rollover_completed.clone()).await.unwrap();
+
+        // appending an event which does not imply that the CFD failed
+        db.append_event(lock_confirmed(&cfd)).await.unwrap();
+
+        db.move_to_failed_cfds().await.unwrap();
+
+        let load_from_open = db.load_open_cfd::<DummyAggregate>(cfd.id(), ()).await;
+        let load_from_events = {
+            let res = load_cfd_events(&mut *conn, cfd.id(), 0).await.unwrap();
+
+            res
+        };
+        let load_from_failed = db.load_failed_cfd::<DummyAggregate>(cfd.id(), ()).await;
+
+        assert!(load_from_open.is_ok());
+        assert_eq!(load_from_events.len(), 2);
+        assert!(load_from_failed.is_err());
+    }
 
     #[tokio::test]
     async fn given_contract_setup_failed_when_move_cfds_to_failed_table_then_creation_timestamp_is_that_of_contract_setup_started_event(

@@ -264,7 +264,8 @@ impl ClosedCfdInputAggregate {
             counterparty_network_identity: order.counterparty_network_identity(),
             counterparty_peer_id: order.counterparty_peer_id(),
             role: order.role(),
-            fee_account: FeeAccount::new(order.position(), order.role()).add_opening_fee(order.opening_fee()),
+            fee_account: FeeAccount::new(order.position(), order.role())
+                .add_opening_fee(order.opening_fee()),
             initial_funding_fee,
             latest_dlc: None,
             collaborative_settlement: None,
@@ -979,12 +980,13 @@ mod tests {
     use crate::memory;
     use bdk::bitcoin::SignedAmount;
     use model::libp2p::PeerId;
-    use model::{Cfd, Order};
+    use model::Cfd;
     use model::ContractSymbol;
     use model::EventKind;
     use model::FundingRate;
     use model::OfferId;
     use model::OpeningFee;
+    use model::Order;
     use model::Payout;
     use model::Price;
     use model::Timestamp;

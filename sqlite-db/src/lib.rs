@@ -8,10 +8,11 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::Stream;
 use model::libp2p::PeerId;
-use model::{CfdEvent, Order};
+use model::CfdEvent;
 use model::Dlc;
 use model::EventKind;
 use model::Identity;
+use model::Order;
 use model::OrderId;
 use model::Role;
 use sqlx::migrate::MigrateError;
@@ -183,29 +184,29 @@ impl Connection {
             contract_symbol
         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
         )
-            .bind(&order_id)
-            .bind(&offer_id)
-            .bind(&position)
-            .bind(&initial_price)
-            .bind(&leverage)
-            .bind(&order.settlement_time_interval_hours().whole_hours())
-            .bind(&quantity)
-            .bind(&counterparty_network_identity)
-            .bind(&counterparty_peer_id.unwrap_or_else(|| {
-                tracing::debug!(
+        .bind(&order_id)
+        .bind(&offer_id)
+        .bind(&position)
+        .bind(&initial_price)
+        .bind(&leverage)
+        .bind(&order.settlement_time_interval_hours().whole_hours())
+        .bind(&quantity)
+        .bind(&counterparty_network_identity)
+        .bind(&counterparty_peer_id.unwrap_or_else(|| {
+            tracing::debug!(
                 order_id=%order.id(),
                 counterparty_identity=%order.counterparty_network_identity(),
                 "Inserting deprecated CFD with placeholder peer-id"
             );
-                models::PeerId::from(model::libp2p::PeerId::placeholder())
-            }))
-            .bind(&role)
-            .bind(&opening_fee)
-            .bind(&initial_funding_rate)
-            .bind(&tx_fee_rate)
-            .bind(&contract_symbol)
-            .execute(&mut conn)
-            .await?;
+            models::PeerId::from(model::libp2p::PeerId::placeholder())
+        }))
+        .bind(&role)
+        .bind(&opening_fee)
+        .bind(&initial_funding_rate)
+        .bind(&tx_fee_rate)
+        .bind(&contract_symbol)
+        .execute(&mut conn)
+        .await?;
 
         if query_result.rows_affected() != 1 {
             bail!("failed to insert cfd");
@@ -213,7 +214,6 @@ impl Connection {
 
         Ok(())
     }
-
 
     /// Appends an event to the `events` table.
     ///
@@ -630,10 +630,7 @@ async fn load_cfd_row_and_dlc(conn: &mut SqliteConnection, id: OrderId) -> Resul
     let (order, row_id) = load_order_and_row_id(&mut *conn, id).await?;
     let dlc = load_dlc(&mut *conn, row_id).await?;
 
-    Ok(Cfd {
-        order,
-        dlc,
-    })
+    Ok(Cfd { order, dlc })
 }
 
 async fn load_dlc(conn: &mut SqliteConnection, cfd_row_id: i64) -> Result<Dlc, Error> {
@@ -804,8 +801,13 @@ async fn delete_from_events_table(conn: &mut SqliteConnection, id: OrderId) -> R
 mod tests {
     use super::*;
     use bdk::bitcoin::Amount;
-    use model::{Cfd, ContractSymbol, OfferId};
+    use model::Cfd;
+    use model::CompleteFee;
+    use model::ContractSymbol;
+    use model::FundingFee;
+    use model::FundingRate;
     use model::Leverage;
+    use model::OfferId;
     use model::OpeningFee;
     use model::Position;
     use model::Price;
@@ -813,7 +815,6 @@ mod tests {
     use model::Timestamp;
     use model::TxFeeRate;
     use model::Usd;
-    use model::FundingRate;
     use pretty_assertions::assert_eq;
     use rust_decimal_macros::dec;
 
@@ -832,7 +833,10 @@ mod tests {
         assert_eq!(order.position(), loaded.position());
         assert_eq!(order.initial_price(), loaded.initial_price());
         assert_eq!(order.taker_leverage(), loaded.taker_leverage());
-        assert_eq!(order.settlement_time_interval_hours(), loaded.settlement_time_interval_hours());
+        assert_eq!(
+            order.settlement_time_interval_hours(),
+            loaded.settlement_time_interval_hours()
+        );
         assert_eq!(order.quantity(), loaded.quantity());
         assert_eq!(
             order.counterparty_network_identity(),
@@ -906,7 +910,12 @@ mod tests {
 
         assert_eq!(
             "12D3KooWP3BN6bq9jPy8cP7Grj1QyUBfr7U6BeQFgMwfTTu12wuY",
-            loaded.counterparty_peer_id().unwrap().inner().to_string().as_str()
+            loaded
+                .counterparty_peer_id()
+                .unwrap()
+                .inner()
+                .to_string()
+                .as_str()
         );
     }
 
@@ -924,7 +933,12 @@ mod tests {
 
         assert_eq!(
             "12D3KooWEsK2X8Tp24XtyWh7DM65VfwXtNH2cmfs2JsWmkmwKbV1",
-            loaded.counterparty_peer_id().unwrap().inner().to_string().as_str()
+            loaded
+                .counterparty_peer_id()
+                .unwrap()
+                .inner()
+                .to_string()
+                .as_str()
         );
     }
 
@@ -985,6 +999,43 @@ mod tests {
             TxFeeRate::default(),
             ContractSymbol::BtcUsd,
         )
+    }
+
+    pub fn dummy_cfd(order_id: OrderId, dlc: Dlc) -> Cfd {
+        Cfd::new(
+            Order::new(
+                order_id,
+                OfferId::default(),
+                Position::Long,
+                Price::new(dec!(60_000)).unwrap(),
+                Leverage::TWO,
+                Duration::hours(24),
+                Role::Taker,
+                Usd::new(dec!(1_000)),
+                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+                    .parse()
+                    .unwrap(),
+                None,
+                OpeningFee::new(Amount::from_sat(2000)),
+                FundingRate::default(),
+                TxFeeRate::default(),
+                ContractSymbol::BtcUsd,
+            ),
+            dlc,
+        )
+    }
+
+    pub fn extract_rollover_completed_data(
+        event: EventKind,
+    ) -> (Dlc, FundingFee, Option<CompleteFee>) {
+        match event {
+            RolloverCompleted {
+                dlc: Some(dlc),
+                funding_fee,
+                complete_fee,
+            } => (dlc, funding_fee, complete_fee),
+            _ => panic!("Expected RolloverCompleted event with DLC"),
+        }
     }
 
     pub fn lock_confirmed(cfd: &Cfd) -> CfdEvent {
